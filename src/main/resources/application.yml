@@ -1,0 +1,137 @@
+spring:
+  application:
+    name: api-gateway
+
+  # Redis för rate limiting
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+  cloud:
+    gateway:
+      routes:
+        # Auth Service
+        - id: auth-service
+          uri: ${AUTH_SERVICE_URL:http://localhost:8085}
+          predicates:
+            - Path=/api/v1/auth/**
+
+        # Rule Engine
+        - id: rule-engine
+          uri: ${RULE_ENGINE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/v1/violations/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 20
+                redis-rate-limiter.burstCapacity: 40
+
+        # Session Service
+        - id: session-service
+          uri: ${SESSION_SERVICE_URL:http://localhost:8082}
+          predicates:
+            - Path=/api/v1/sessions/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 30
+                redis-rate-limiter.burstCapacity: 60
+
+        # Parking Mapping Service
+        - id: parking-mapping
+          uri: ${PARKING_MAPPING_URL:http://localhost:8083}
+          predicates:
+            - Path=/api/v1/mapping/**
+
+        # Event Streaming Service (SSE)
+        - id: event-streaming
+          uri: ${EVENT_STREAMING_URL:http://localhost:8084}
+          predicates:
+            - Path=/api/v1/events/**
+
+        # File Service
+        - id: file-service
+          uri: ${FILE_SERVICE_URL:http://localhost:8086}
+          predicates:
+            - Path=/api/v1/files/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 10
+                redis-rate-limiter.burstCapacity: 20
+
+        # Notification Service
+        - id: notification-service
+          uri: ${NOTIFICATION_SERVICE_URL:http://localhost:8087}
+          predicates:
+            - Path=/api/v1/notifications/**
+
+        # Lookup Service (LPR / ägardata)
+        - id: lookup-service
+          uri: ${LOOKUP_SERVICE_URL:http://localhost:8089}
+          predicates:
+            - Path=/api/v1/lookup/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 10
+                redis-rate-limiter.burstCapacity: 20
+
+        # Payment Service
+        - id: payment-service
+          uri: ${PAYMENT_SERVICE_URL:http://localhost:8088}
+          predicates:
+            - Path=/api/v1/payments/**
+
+        # Python AI Service
+        - id: ai-service
+          uri: ${AI_SERVICE_URL:http://localhost:8000}
+          predicates:
+            - Path=/api/v1/ai/**
+          filters:
+            - RewritePath=/api/v1/ai/(?<segment>.*), /${segment}
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 5
+                redis-rate-limiter.burstCapacity: 10
+
+      default-filters:
+        - AddResponseHeader=X-Service, park-view-gateway
+        - DedupeResponseHeader=Access-Control-Allow-Origin
+      globalcors:
+        corsConfigurations:
+          '[/**]':
+            allowedOrigins:
+              - ${FRONTEND_URL:http://localhost:5173}
+            allowedMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+            allowedHeaders: ["*"]
+            allowCredentials: true
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ${SUPABASE_URL}/auth/v1/keys
+
+server:
+  port: ${PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,gateway
+
+parkview:
+  gateway:
+    public-paths:
+      - /api/v1/auth/**
+      - /api/v1/sessions/count/active
+      - /api/v1/payments/webhook
+      - /actuator/health
+    operator-paths:
+      - /api/v1/violations/**
+      - /api/v1/ai/**
+      - /api/v1/notifications/**
