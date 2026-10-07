@@ -51,6 +51,20 @@ spring:
           predicates:
             - Path=/api/v1/events/**
 
+        # Ingestion Service (kamera-API: ingest/heartbeat/admin).
+        # Tjänstens egna routes är /cameras/** (inte /api/v1-prefixade som
+        # övriga tjänster), så vi skriver om path:en vid vidarebefordran.
+        - id: ingestion-service
+          uri: ${INGESTION_SERVICE_URL:http://localhost:9000}
+          predicates:
+            - Path=/api/v1/cameras/**
+          filters:
+            - RewritePath=/api/v1/cameras/(?<segment>.*), /cameras/${segment}
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 10
+                redis-rate-limiter.burstCapacity: 20
+
         # File Service
         - id: file-service
           uri: ${FILE_SERVICE_URL:http://localhost:8086}
@@ -131,7 +145,13 @@ parkview:
       - /api/v1/sessions/count/active
       - /api/v1/payments/webhook
       - /actuator/health
+      # Kamera-device-autentiserade (api_key i request-body, inget JWT) —
+      # samma mönster som payments/webhook.
+      - /api/v1/cameras/heartbeat
+      - /api/v1/cameras/ingest
     operator-paths:
       - /api/v1/violations/**
       - /api/v1/ai/**
-      - /api/v1/notifications/**
+      - /api/v1/cameras/admin/**
+      # OBS: /api/v1/notifications/** är INTE operator-only — test-push är
+      # till för alla inloggade (drivers testar sin egen prenumeration).
