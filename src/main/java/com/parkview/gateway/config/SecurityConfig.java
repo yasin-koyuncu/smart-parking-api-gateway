@@ -1,90 +1,136 @@
 package com.parkview.gateway.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.parkview.gateway.security.ParkviewJwtConverter;
+import com.parkview.gateway.security.SseTokenBearerConverter;
+import com.parkview.gateway.web.ProblemResponses;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.authorization.AuthorizationDecision;
+import org.springframework.security.authorization.ReactiveAuthorizationManager;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
-import org.springframework.security.oauth2.server.resource.authentication.ReactiveJwtAuthenticationConverter;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2Error;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
+import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusReactiveJwtDecoder;
+import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 import org.springframework.security.web.server.SecurityWebFilterChain;
-import reactor.core.publisher.Flux;
+import org.springframework.security.web.server.authorization.AuthorizationContext;
+import org.springframework.security.web.server.header.ReferrerPolicyServerHttpHeadersWriter.ReferrerPolicy;
+import org.springframework.web.cors.reactive.CorsConfigurationSource;
+import reactor.core.publisher.Mono;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 
 /**
- * JWT-baserad säkerhetskonfiguration.
- * Supabase-JWT valideras mot JWKS-endpointen.
- *
- * Roller:
- *   authenticated  → kan se egna sessioner och betala böter
- *   operator       → kan se alla sessioner, violations, kamera-admin
+ * Edge security: validate the Supabase JWT (ES256 through JWKS, issuer + audience), answer CORS before
+ * authorisation, and apply the declarative rules from {@code parkview.gateway.rules}.
+ * Roles: ADMIN (implies OPERATOR), OPERATOR, DRIVER from {@code app_metadata.role}.
  */
 @Configuration
 @EnableWebFluxSecurity
-@EnableConfigurationProperties(GatewayPathsProperties.class)
+@EnableConfigurationProperties({GatewayProperties.class, SecurityProperties.class})
 public class SecurityConfig {
 
-    private final GatewayPathsProperties paths;
-
-    public SecurityConfig(GatewayPathsProperties paths) {
-        this.paths = paths;
-    }
-
     @Bean
-    public SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http) {
-        return http
-                .csrf(ServerHttpSecurity.CsrfSpec::disable)
-                .authorizeExchange(ex -> ex
-                        // Publika endpoints (från parkview.gateway.public-paths) —
-                        // t.ex. /api/v1/auth/**, /api/v1/payments/webhook och de två
-                        // kamera-device-autentiserade endpoints (api_key i body, inget JWT).
-                        .pathMatchers(paths.getPublicPaths().toArray(new String[0])).permitAll()
-
-                        // Förare — kräver inloggning
-                        .pathMatchers("/api/v1/sessions/plate/**").authenticated()
-                        .pathMatchers(HttpMethod.PATCH, "/api/v1/sessions/*/pay").authenticated()
-
-                        // Operatör — kräver operator-roll (från parkview.gateway.operator-paths)
-                        .pathMatchers(paths.getOperatorPaths().toArray(new String[0])).hasRole("operator")
-                        .pathMatchers("/api/v1/sessions/zone/**").hasRole("operator")
-
-                        .anyExchange().authenticated()
-                )
-                .oauth2ResourceServer(oauth2 -> oauth2
-                        .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtConverter()))
-                )
+    ReactiveJwtDecoder jwtDecoder(SecurityProperties props) {
+        NimbusReactiveJwtDecoder decoder = NimbusReactiveJwtDecoder.withJwkSetUri(props.resolvedJwksUri())
+                .jwsAlgorithm(SignatureAlgorithm.ES256)
                 .build();
+
+        OAuth2TokenValidator<Jwt> audience = jwt -> jwt.getAudience() != null && jwt.getAudience().contains(props.audience())
+                ? OAuth2TokenValidatorResult.success()
+                : OAuth2TokenValidatorResult.failure(new OAuth2Error(
+                        "invalid_token", "Required audience '" + props.audience() + "' is missing", null));
+
+        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+                JwtValidators.createDefaultWithIssuer(props.issuer()), audience));
+        return decoder;
     }
 
-    /**
-     * Extraherar roller från Supabase JWT.
-     * Supabase lagrar app_metadata.role i JWT-claims.
-     */
     @Bean
-    public ReactiveJwtAuthenticationConverter jwtConverter() {
-        var converter = new ReactiveJwtAuthenticationConverter();
-        converter.setJwtGrantedAuthoritiesConverter(jwt -> {
-            var authorities = new java.util.ArrayList<org.springframework.security.core.GrantedAuthority>();
+    SecurityWebFilterChain securityWebFilterChain(
+            ServerHttpSecurity http,
+            GatewayProperties gateway,
+            SecurityProperties security,
+            ReactiveJwtDecoder jwtDecoder,
+            CorsConfigurationSource cors,
+            ObjectMapper objectMapper) {
 
-            // Standard authenticated-roll
-            authorities.add(() -> "ROLE_authenticated");
+        String csp = gateway.docsEnabled()
+                ? "default-src 'self' 'unsafe-inline' data:"
+                : "default-src 'none'; frame-ancestors 'none'";
 
-            // Supabase: app_metadata.role
-            var appMeta = jwt.getClaimAsMap("app_metadata");
-            if (appMeta != null) {
-                Object role = appMeta.get("role");
-                if ("operator".equals(role) || "admin".equals(role)) {
-                    authorities.add(() -> "ROLE_operator");
+        http
+                .csrf(ServerHttpSecurity.CsrfSpec::disable)
+                .httpBasic(ServerHttpSecurity.HttpBasicSpec::disable)
+                .formLogin(ServerHttpSecurity.FormLoginSpec::disable)
+                .logout(ServerHttpSecurity.LogoutSpec::disable)
+                .cors(c -> c.configurationSource(cors))
+                .headers(h -> h
+                        .contentSecurityPolicy(p -> p.policyDirectives(csp))
+                        .referrerPolicy(r -> r.policy(ReferrerPolicy.NO_REFERRER))
+                        .permissionsPolicy(p -> p.policy("camera=(), microphone=(), geolocation=()")))
+                .exceptionHandling(e -> e
+                        .authenticationEntryPoint((exchange, ex) -> ProblemResponses.write(
+                                exchange, objectMapper, HttpStatus.UNAUTHORIZED, "Unauthorized", "Authentication is required"))
+                        .accessDeniedHandler((exchange, ex) -> ProblemResponses.write(
+                                exchange, objectMapper, HttpStatus.FORBIDDEN, "Forbidden", "You are not allowed to perform this action")))
+                .oauth2ResourceServer(o -> o
+                        .bearerTokenConverter(new SseTokenBearerConverter(gateway))
+                        .jwt(j -> j.jwtDecoder(jwtDecoder).jwtAuthenticationConverter(ParkviewJwtConverter.create())));
+
+        http.authorizeExchange(ex -> {
+            ex.pathMatchers(HttpMethod.OPTIONS, "/**").permitAll();
+            ex.pathMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll();
+            ex.pathMatchers("/actuator/prometheus").access(internalKey(security));
+            ex.pathMatchers("/actuator/**").denyAll();
+
+            if (gateway.docsEnabled()) {
+                ex.pathMatchers("/docs/**", "/swagger-ui/**", "/swagger-ui.html", "/webjars/**", "/v3/api-docs/**").permitAll();
+            }
+
+            for (GatewayProperties.Rule rule : gateway.rules()) {
+                String[] paths = rule.paths().toArray(String[]::new);
+                if (rule.methods().isEmpty()) {
+                    apply(rule.access(), ex.pathMatchers(paths));
+                } else {
+                    for (String method : rule.methods()) {
+                        apply(rule.access(), ex.pathMatchers(HttpMethod.valueOf(method), paths));
+                    }
                 }
             }
-
-            // Supabase: user_role claim (alternativt format)
-            String userRole = jwt.getClaimAsString("user_role");
-            if ("operator".equals(userRole) || "admin".equals(userRole)) {
-                authorities.add(() -> "ROLE_operator");
-            }
-
-            return Flux.fromIterable(authorities);
+            ex.anyExchange().authenticated();
         });
-        return converter;
+        return http.build();
+    }
+
+    private static void apply(GatewayProperties.Access access, ServerHttpSecurity.AuthorizeExchangeSpec.Access spec) {
+        switch (access) {
+            case PUBLIC -> spec.permitAll();
+            case AUTHENTICATED -> spec.authenticated();
+            case OPERATOR -> spec.hasRole("OPERATOR");
+            case ADMIN -> spec.hasRole("ADMIN");
+        }
+    }
+
+    /** Metrics are for the platform only: callers must present the internal API key. */
+    private static ReactiveAuthorizationManager<AuthorizationContext> internalKey(SecurityProperties security) {
+        return (Mono<Authentication> authentication, AuthorizationContext context) -> {
+            String presented = context.getExchange().getRequest().getHeaders().getFirst("X-Internal-Api-Key");
+            boolean ok = security.internalApiEnabled() && presented != null && MessageDigest.isEqual(
+                    security.internalApiKey().getBytes(StandardCharsets.UTF_8), presented.getBytes(StandardCharsets.UTF_8));
+            return Mono.just(new AuthorizationDecision(ok));
+        };
     }
 }

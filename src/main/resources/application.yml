@@ -1,157 +1,244 @@
 spring:
   application:
     name: api-gateway
-
-  # Redis för rate limiting
   data:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
-
+      timeout: 500ms            # a slow Redis must not make every request slow (limiter fails open)
   cloud:
     gateway:
-      routes:
-        # Auth Service
-        - id: auth-service
-          uri: ${AUTH_SERVICE_URL:http://localhost:8085}
-          predicates:
-            - Path=/api/v1/auth/**
+      server:
+        webflux:
+          httpclient:
+            connect-timeout: 2000
+            response-timeout: 15s
+            pool:
+              max-idle-time: 30s
+              max-life-time: 10m
+          routes:
+            # ── Authentication (public). Credential endpoints get a much stricter per-IP limit (brute force). ──
+            - id: auth-sensitive
+              uri: ${AUTH_SERVICE_URL:http://localhost:8085}
+              predicates:
+                - Path=/api/v1/auth/login,/api/v1/auth/register,/api/v1/auth/reset-password
+              filters:
+                - name: RequestSize
+                  args: { maxSize: 16KB }
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 1
+                    redis-rate-limiter.burstCapacity: 5
+            - id: auth-service
+              uri: ${AUTH_SERVICE_URL:http://localhost:8085}
+              predicates:
+                - Path=/api/v1/auth/**
+              filters:
+                - name: RequestSize
+                  args: { maxSize: 16KB }
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 10
+                    redis-rate-limiter.burstCapacity: 20
 
-        # Rule Engine
-        - id: rule-engine
-          uri: ${RULE_ENGINE_URL:http://localhost:8081}
-          predicates:
-            - Path=/api/v1/violations/**
-          filters:
-            - name: RequestRateLimiter
-              args:
-                redis-rate-limiter.replenishRate: 20
-                redis-rate-limiter.burstCapacity: 40
+            # ── Enforcement ──
+            - id: rule-engine
+              uri: ${RULE_ENGINE_URL:http://localhost:8081}
+              predicates:
+                - Path=/api/v1/violations/**,/api/v1/permits/**
+              filters:
+                - name: RequestSize
+                  args: { maxSize: 1MB }
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 20
+                    redis-rate-limiter.burstCapacity: 40
+                - name: Retry
+                  args: { retries: 2, methods: GET, statuses: "BAD_GATEWAY,SERVICE_UNAVAILABLE,GATEWAY_TIMEOUT", backoff: { firstBackoff: 50ms, maxBackoff: 500ms, factor: 2 } }
 
-        # Session Service
-        - id: session-service
-          uri: ${SESSION_SERVICE_URL:http://localhost:8082}
-          predicates:
-            - Path=/api/v1/sessions/**
-          filters:
-            - name: RequestRateLimiter
-              args:
-                redis-rate-limiter.replenishRate: 30
-                redis-rate-limiter.burstCapacity: 60
+            - id: session-service
+              uri: ${SESSION_SERVICE_URL:http://localhost:8082}
+              predicates:
+                - Path=/api/v1/sessions/**
+              filters:
+                - name: RequestSize
+                  args: { maxSize: 1MB }
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 30
+                    redis-rate-limiter.burstCapacity: 60
+                - name: Retry
+                  args: { retries: 2, methods: GET, statuses: "BAD_GATEWAY,SERVICE_UNAVAILABLE,GATEWAY_TIMEOUT", backoff: { firstBackoff: 50ms, maxBackoff: 500ms, factor: 2 } }
 
-        # Parking Mapping Service
-        - id: parking-mapping
-          uri: ${PARKING_MAPPING_URL:http://localhost:8083}
-          predicates:
-            - Path=/api/v1/mapping/**
+            - id: parking-mapping
+              uri: ${PARKING_MAPPING_URL:http://localhost:8083}
+              predicates:
+                - Path=/api/v1/mapping/**,/api/v1/zones/**
+              filters:
+                - name: RequestSize
+                  args: { maxSize: 4MB }
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 20
+                    redis-rate-limiter.burstCapacity: 40
+                - name: Retry
+                  args: { retries: 2, methods: GET, statuses: "BAD_GATEWAY,SERVICE_UNAVAILABLE,GATEWAY_TIMEOUT", backoff: { firstBackoff: 50ms, maxBackoff: 500ms, factor: 2 } }
 
-        # Event Streaming Service (SSE)
-        - id: event-streaming
-          uri: ${EVENT_STREAMING_URL:http://localhost:8084}
-          predicates:
-            - Path=/api/v1/events/**
+            # Server-sent events: long-lived, so no response timeout (negative disables it) and no limiter.
+            - id: event-streaming
+              uri: ${EVENT_STREAMING_URL:http://localhost:8084}
+              predicates:
+                - Path=/api/v1/events/**
+              metadata:
+                response-timeout: -1
 
-        # Ingestion Service (kamera-API: ingest/heartbeat/admin).
-        # Tjänstens egna routes är /cameras/** (inte /api/v1-prefixade som
-        # övriga tjänster), så vi skriver om path:en vid vidarebefordran.
-        - id: ingestion-service
-          uri: ${INGESTION_SERVICE_URL:http://localhost:9000}
-          predicates:
-            - Path=/api/v1/cameras/**
-          filters:
-            - RewritePath=/api/v1/cameras/(?<segment>.*), /cameras/${segment}
-            - name: RequestRateLimiter
-              args:
-                redis-rate-limiter.replenishRate: 10
-                redis-rate-limiter.burstCapacity: 20
+            # ── Cameras (device api key in the body, no JWT) -> ingestion-service ──
+            - id: ingestion-service
+              uri: ${INGESTION_SERVICE_URL:http://localhost:9000}
+              predicates:
+                - Path=/api/v1/cameras/**
+              filters:
+                - RewritePath=/api/v1/cameras/(?<segment>.*), /cameras/${segment}
+                - name: RequestSize
+                  args: { maxSize: 12MB }       # base64 snapshot
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 10
+                    redis-rate-limiter.burstCapacity: 20
 
-        # File Service
-        - id: file-service
-          uri: ${FILE_SERVICE_URL:http://localhost:8086}
-          predicates:
-            - Path=/api/v1/files/**
-          filters:
-            - name: RequestRateLimiter
-              args:
-                redis-rate-limiter.replenishRate: 10
-                redis-rate-limiter.burstCapacity: 20
+            - id: file-service
+              uri: ${FILE_SERVICE_URL:http://localhost:8086}
+              predicates:
+                - Path=/api/v1/files/**
+              filters:
+                - name: RequestSize
+                  args: { maxSize: 22MB }       # 20 MB image + multipart overhead
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 10
+                    redis-rate-limiter.burstCapacity: 20
 
-        # Notification Service
-        - id: notification-service
-          uri: ${NOTIFICATION_SERVICE_URL:http://localhost:8087}
-          predicates:
-            - Path=/api/v1/notifications/**
+            - id: notification-service
+              uri: ${NOTIFICATION_SERVICE_URL:http://localhost:8087}
+              predicates:
+                - Path=/api/v1/notifications/**
+              filters:
+                - name: RequestSize
+                  args: { maxSize: 64KB }
 
-        # Lookup Service (LPR / ägardata)
-        - id: lookup-service
-          uri: ${LOOKUP_SERVICE_URL:http://localhost:8089}
-          predicates:
-            - Path=/api/v1/lookup/**
-          filters:
-            - name: RequestRateLimiter
-              args:
-                redis-rate-limiter.replenishRate: 10
-                redis-rate-limiter.burstCapacity: 20
+            - id: lookup-service
+              uri: ${LOOKUP_SERVICE_URL:http://localhost:8089}
+              predicates:
+                - Path=/api/v1/lookup/**
+              filters:
+                - name: RequestSize
+                  args: { maxSize: 64KB }
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 10
+                    redis-rate-limiter.burstCapacity: 20
 
-        # Payment Service
-        - id: payment-service
-          uri: ${PAYMENT_SERVICE_URL:http://localhost:8088}
-          predicates:
-            - Path=/api/v1/payments/**
+            - id: payment-service
+              uri: ${PAYMENT_SERVICE_URL:http://localhost:8088}
+              predicates:
+                - Path=/api/v1/payments/**
+              filters:
+                - name: RequestSize
+                  args: { maxSize: 256KB }
 
-        # Python AI Service
-        - id: ai-service
-          uri: ${AI_SERVICE_URL:http://localhost:8000}
-          predicates:
-            - Path=/api/v1/ai/**
-          filters:
-            - RewritePath=/api/v1/ai/(?<segment>.*), /${segment}
-            - name: RequestRateLimiter
-              args:
-                redis-rate-limiter.replenishRate: 5
-                redis-rate-limiter.burstCapacity: 10
-
-      default-filters:
-        - AddResponseHeader=X-Service, park-view-gateway
-        - DedupeResponseHeader=Access-Control-Allow-Origin
-      globalcors:
-        corsConfigurations:
-          '[/**]':
-            allowedOrigins:
-              - ${FRONTEND_URL:http://localhost:5173}
-            allowedMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
-            allowedHeaders: ["*"]
-            allowCredentials: true
-
-  security:
-    oauth2:
-      resourceserver:
-        jwt:
-          jwk-set-uri: ${SUPABASE_URL}/auth/v1/keys
+            # AI service is internal: operators reach it through the gateway, which adds the service key.
+            - id: ai-service
+              uri: ${AI_SERVICE_URL:http://localhost:8000}
+              predicates:
+                - Path=/api/v1/ai/**
+              filters:
+                - RewritePath=/api/v1/ai/(?<segment>.*), /${segment}
+                - RemoveRequestHeader=X-Internal-Api-Key
+                - AddRequestHeader=X-Internal-Api-Key, ${INTERNAL_API_KEY:}
+                - name: RequestSize
+                  args: { maxSize: 12MB }
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 5
+                    redis-rate-limiter.burstCapacity: 10
 
 server:
   port: ${PORT:8080}
+  shutdown: graceful
+  forward-headers-strategy: framework
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,gateway
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+springdoc:
+  api-docs:
+    enabled: ${DOCS_ENABLED:false}
+  swagger-ui:
+    enabled: ${DOCS_ENABLED:false}
+    urls:
+      - { name: session-service, url: /docs/session-service/v3/api-docs }
+      - { name: rule-engine, url: /docs/rule-engine/v3/api-docs }
+      - { name: parking-mapping, url: /docs/parking-mapping/v3/api-docs }
+      - { name: payment-service, url: /docs/payment-service/v3/api-docs }
+      - { name: notification-service, url: /docs/notification-service/v3/api-docs }
+      - { name: lookup-service, url: /docs/lookup-service/v3/api-docs }
+      - { name: file-service, url: /docs/file-service/v3/api-docs }
+      - { name: auth-service, url: /docs/auth-service/v3/api-docs }
+      - { name: event-streaming, url: /docs/event-streaming/v3/api-docs }
+
+logging:
+  pattern:
+    level: "%5p [${spring.application.name:}]"
 
 parkview:
+  security:
+    issuer: ${SUPABASE_URL}/auth/v1
+    audience: ${SUPABASE_AUDIENCE:authenticated}
+    internal-api-key: ${INTERNAL_API_KEY:}
+
   gateway:
-    public-paths:
-      - /api/v1/auth/**
-      - /api/v1/sessions/count/active
-      - /api/v1/payments/webhook
-      - /actuator/health
-      # Kamera-device-autentiserade (api_key i request-body, inget JWT) —
-      # samma mönster som payments/webhook.
-      - /api/v1/cameras/heartbeat
-      - /api/v1/cameras/ingest
-    operator-paths:
-      - /api/v1/violations/**
-      - /api/v1/ai/**
-      - /api/v1/cameras/admin/**
-      # OBS: /api/v1/notifications/** är INTE operator-only — test-push är
-      # till för alla inloggade (drivers testar sin egen prenumeration).
+    docs-enabled: ${DOCS_ENABLED:false}
+    # Browser origins (the frontend). Comma separated in the environment.
+    allowed-origins: ${FRONTEND_URL:http://localhost:5173}
+    # Only the SSE endpoints may carry the bearer token in ?token= (EventSource cannot send headers).
+    sse-token-paths:
+      - /api/v1/events/stream/**
+    services:
+      session-service: ${SESSION_SERVICE_URL:http://localhost:8082}
+      rule-engine: ${RULE_ENGINE_URL:http://localhost:8081}
+      parking-mapping: ${PARKING_MAPPING_URL:http://localhost:8083}
+      payment-service: ${PAYMENT_SERVICE_URL:http://localhost:8088}
+      notification-service: ${NOTIFICATION_SERVICE_URL:http://localhost:8087}
+      lookup-service: ${LOOKUP_SERVICE_URL:http://localhost:8089}
+      file-service: ${FILE_SERVICE_URL:http://localhost:8086}
+      auth-service: ${AUTH_SERVICE_URL:http://localhost:8085}
+      event-streaming: ${EVENT_STREAMING_URL:http://localhost:8084}
+
+    # Declarative edge authorisation: first match wins, anything unmatched needs an authenticated user.
+    # The services re-check roles AND object ownership (zones/plates) themselves.
+    rules:
+      # public: login/refresh flows, Stripe webhook (signature-authenticated), device endpoints (api key), KPI counter
+      - { paths: ["/api/v1/auth/**"], access: PUBLIC }
+      - { paths: ["/api/v1/payments/webhook"], methods: [POST], access: PUBLIC }
+      - { paths: ["/api/v1/cameras/ingest", "/api/v1/cameras/heartbeat"], methods: [POST], access: PUBLIC }
+      - { paths: ["/api/v1/sessions/count/active"], methods: [GET], access: PUBLIC }
+      # operator/admin only
+      - { paths: ["/api/v1/ai/**", "/api/v1/cameras/admin/**", "/api/v1/lookup/**", "/api/v1/permits/**"], access: OPERATOR }
+      - { paths: ["/api/v1/sessions/zone/**", "/api/v1/sessions/start"], access: OPERATOR }
+      - { paths: ["/api/v1/sessions/*/pay"], methods: [PATCH], access: OPERATOR }
+      - { paths: ["/api/v1/violations/zone/**", "/api/v1/violations/*/resolve"], access: OPERATOR }
+      - { paths: ["/api/v1/events/status", "/api/v1/events/stream/operator"], access: OPERATOR }
+      - { paths: ["/api/v1/mapping/**"], methods: [POST, PUT, PATCH, DELETE], access: OPERATOR }
+      # zone geometry drives billing: admin only for writes
+      - { paths: ["/api/v1/zones", "/api/v1/zones/**"], methods: [POST, PUT, PATCH, DELETE], access: ADMIN }
