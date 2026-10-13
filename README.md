@@ -20,12 +20,13 @@ unauthorised traffic away from them and gives every error the same shape.
 |---|---|---|
 | `/api/v1/auth/**` | authentication-service | `login`, `register`, `reset-password`: 1 req/s per IP (burst 5), 16 KB bodies |
 | `/api/v1/access/**` | authentication-service | roles, grants and audit log (ADR 0002); `access:read` / `access:manage`, `GET /access/me/**` for any signed-in user |
-| `/api/v1/violations/**`, `/api/v1/permits/**` | rule-service | |
+| `/api/v1/users/**` | authentication-service | profile of the signed-in user (any role, the service uses the token subject) |
+| `/api/v1/violations/**`, `/api/v1/permits/**`, `/api/v1/fines/**` | rule-service | fines: any signed-in user, the service decides on ownership and zones |
 | `/api/v1/sessions/**` | session-service | |
-| `/api/v1/mapping/**`, `/api/v1/zones/**` | parking-mapping-service | spot writes: `spot:write`, zone writes: `zone:write` |
+| `/api/v1/mapping/**`, `/api/v1/zones/**` | parking-mapping-service | spot writes: `spot:write`, zone writes: `zone:write`, map history (`zones/*/versions`, `zones/*/changes`, `spots/*/changes`): `mapping:view` |
 | `/api/v1/events/**` | event-streaming | SSE, no response timeout, `?token=` allowed on `/stream/**` only |
 | `/api/v1/cameras/**` | ingestion-service | rewritten to `/cameras/**`; `ingest` and `heartbeat` are public (camera api key), 12 MB bodies |
-| `/api/v1/files/**` | file-service | 22 MB bodies |
+| `/api/v1/files/**` | file-service | 22 MB bodies; uploads `file:upload`, `GET snapshots/**` `file:view`, `GET evidence/*/url` any signed-in user (owners need it, the service wants `file:view` of staff) |
 | `/api/v1/notifications/**`, `/api/v1/lookup/**`, `/api/v1/payments/**` | notification / lookup / payment | `payments/webhook` is public (Stripe signature) |
 | `/api/v1/ai/**` | ai-detection-service | rewritten to `/**`, needs `ai:use`, gateway adds `X-Internal-Api-Key` |
 
@@ -47,7 +48,10 @@ Declared in `application.yml` under `parkview.gateway.rules` (first match wins, 
 The operator and admin functions are guarded by permissions, one per function (`/ai/**` `ai:use`, `/cameras/admin/**` `camera:admin`,
 `/lookup/**` `lookup:vehicle`, `/permits/**` `permit:manage`, `sessions/zone/**` `session:read`, session start and pay `session:manage`,
 `violations/zone/**` `violation:read`, `violations/*/resolve` `violation:resolve`, `events/status` and `events/stream/operator`
-`stream:operator`, mapping writes `spot:write`, zone writes `zone:write`, `/access/**` `access:read` for GET and `access:manage` for the rest).
+`stream:operator`, mapping writes `spot:write`, zone writes `zone:write`, map history GETs `mapping:view`, evidence and snapshot uploads `file:upload`, snapshot GETs `file:view`,
+`/access/**` `access:read` for GET and `access:manage` for the rest). Deliberately **not** gated here, because one gateway permission cannot express them: `GET /files/evidence/*/url`
+(owner of the fine, or staff with `file:view`, decided by file-service), `POST /zones/check-overlap` (service accepts `mapping:view`, `zone:write` or `spot:write`, so it is a plain
+authenticated rule ahead of the zone-write rule), the other mapping GETs (drivers read zones and spots), `/fines/**` and `/users/**` (any valid token, the services check ownership).
 `permission` is only valid with `access: PERMISSION` and must be in the catalogue (`Permissions`, mirrors
 `smart-parking-e2e/contracts/permissions.json`): a misspelt or unknown name **fails the startup** instead of guarding nothing.
 
