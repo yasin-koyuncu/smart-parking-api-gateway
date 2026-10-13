@@ -48,6 +48,13 @@ class AuthorizationMatrixTest {
                 new Guarded(HttpMethod.PATCH, "/api/v1/violations/7/resolve", "violation:resolve"),
                 new Guarded(HttpMethod.GET, "/api/v1/events/status", "stream:operator"),
                 new Guarded(HttpMethod.GET, "/api/v1/events/stream/operator", "stream:operator"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/zones/z1/versions", "mapping:view"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/zones/z1/versions", "mapping:view"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/zones/z1/changes", "mapping:view"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/spots/s1/changes", "mapping:view"),
+                new Guarded(HttpMethod.POST, "/api/v1/files/evidence/f1", "file:upload"),
+                new Guarded(HttpMethod.POST, "/api/v1/files/snapshots/c1", "file:upload"),
+                new Guarded(HttpMethod.GET, "/api/v1/files/snapshots/url", "file:view"),
                 new Guarded(HttpMethod.POST, "/api/v1/mapping/spots", "spot:write"),
                 new Guarded(HttpMethod.PUT, "/api/v1/mapping/spots/1", "spot:write"),
                 new Guarded(HttpMethod.DELETE, "/api/v1/mapping/spots/1", "spot:write"),
@@ -171,6 +178,59 @@ class AuthorizationMatrixTest {
     void anEmptyPermissionsClaimDisablesTheFallback() {
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/zone/z1", Map.of("role", "operator", "permissions", List.of()))).isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/zone/z1", Map.of("role", "operator"))).isEqualTo(200);
+    }
+
+    // ── files and mapping reads (permission rules where unambiguous) ────────────
+
+    @Test
+    void evidenceUrlIsNotGatedByAPermissionBecauseOwnersNeedIt() {
+        // the service holds staff to file:view and drivers to ownership; the gateway only wants a valid token
+        for (Map<String, Object> caller : List.<Map<String, Object>>of(Map.of("role", "driver"), Map.of("role", "driver", "permissions", List.of()),
+                Map.of("role", "operator", "permissions", List.of()), permissionsOnly(Set.of("session:read")))) {
+            assertThat(status(HttpMethod.GET, "/api/v1/files/evidence/f1/url", caller)).as(caller.toString()).isEqualTo(200);
+        }
+        assertThat(status(HttpMethod.GET, "/api/v1/files/evidence/f1/url", null)).isEqualTo(401);
+    }
+
+    @Test
+    void operatorsWithTheFileDefaultsReachFilesAndMapHistory() {
+        Map<String, Object> operator = Map.of("role", "operator");
+        assertThat(status(HttpMethod.POST, "/api/v1/files/evidence/f1", operator)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/files/snapshots/url", operator)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/mapping/zones/z1/versions", operator)).isEqualTo(200);
+        Map<String, Object> driver = Map.of("role", "driver");
+        assertThat(status(HttpMethod.POST, "/api/v1/files/evidence/f1", driver)).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/files/snapshots/url", driver)).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/mapping/zones/z1/versions", driver)).isEqualTo(403);
+    }
+
+    @Test
+    void mapReadsDriversNeedStayOpenAndTheOverlapCheckIsLeftToTheService() {
+        Map<String, Object> driver = Map.of("role", "driver", "permissions", List.of());
+        for (String path : List.of("/api/v1/mapping/zones/z1/spots", "/api/v1/mapping/zones/z1/geojson", "/api/v1/mapping/spots/s1",
+                "/api/v1/zones/nearest", "/api/v1/zones")) {
+            assertThat(status(HttpMethod.GET, path, driver)).as(path).isEqualTo(200);
+        }
+        // mapping:view or spot:write alone must get through the gateway (the service accepts either), without zone:write
+        for (String permission : List.of("mapping:view", "spot:write", "zone:write")) {
+            assertThat(status(HttpMethod.POST, "/api/v1/zones/check-overlap", permissionsOnly(Set.of(permission)))).as(permission).isEqualTo(200);
+        }
+        assertThat(status(HttpMethod.POST, "/api/v1/zones/check-overlap", null)).isEqualTo(401);
+        // the rest of the zone writes are unchanged
+        assertThat(status(HttpMethod.POST, "/api/v1/zones", permissionsOnly(Set.of("mapping:view", "spot:write")))).isEqualTo(403);
+    }
+
+    // ── fines and profile: any signed-in user, the services decide ──────────────
+
+    @Test
+    void finesAndUserProfileNeedOnlyAValidToken() {
+        for (String path : List.of("/api/v1/fines/plate/ABC123", "/api/v1/fines/zone/z1", "/api/v1/fines/f1", "/api/v1/users/me")) {
+            assertThat(status(HttpMethod.GET, path, null)).as(path + " anonymous").isEqualTo(401);
+            assertThat(status(HttpMethod.GET, path, Map.of("role", "driver", "permissions", List.of()))).as(path + " driver").isEqualTo(200);
+            assertThat(status(HttpMethod.GET, path, Map.of("role", "operator", "permissions", List.of()))).as(path + " operator").isEqualTo(200);
+        }
+        assertThat(status(HttpMethod.PUT, "/api/v1/users/me", Map.of("role", "driver"))).isEqualTo(200);
+        assertThat(status(HttpMethod.PUT, "/api/v1/users/me", null)).isEqualTo(401);
     }
 
     // ── routes that stay open or role-free ──────────────────────────────────────

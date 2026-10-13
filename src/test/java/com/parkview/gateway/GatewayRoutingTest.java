@@ -288,6 +288,38 @@ class GatewayRoutingTest {
         client.get().uri("/api/v1/access/roles").exchange().expectStatus().isUnauthorized();
     }
 
+    @Test
+    void finesAndTheUserProfileAreRoutedForAnySignedInUser() throws Exception {
+        client.get().uri("/api/v1/fines/plate/ABC123").header("Authorization", "Bearer " + validToken("driver", "d-1"))
+                .exchange().expectStatus().isOk();
+        RecordedRequest fines = upstreamRequest();
+        assertThat(fines.getPath()).isEqualTo("/api/v1/fines/plate/ABC123");
+        assertThat(fines.getHeader("X-User-Id")).isEqualTo("d-1");
+        client.get().uri("/api/v1/users/me").header("Authorization", "Bearer " + validToken("driver", "d-1"))
+                .exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/users/me");
+        client.get().uri("/api/v1/fines/f1").exchange().expectStatus().isUnauthorized();
+        client.get().uri("/api/v1/users/me").exchange().expectStatus().isUnauthorized();
+        assertThat(RECORDED.poll(300, TimeUnit.MILLISECONDS)).as("nothing reached upstream without a token").isNull();
+    }
+
+    @Test
+    void fileAndMapHistoryRulesNeedTheirPermissionButEvidenceUrlsStayOpenForOwners() throws Exception {
+        String viewer = "Bearer " + permissionToken("op-2", "file:view", "mapping:view");
+        client.get().uri("/api/v1/files/snapshots/url?key=cameras/c1/x.jpg").header("Authorization", viewer).exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).startsWith("/api/v1/files/snapshots/url");
+        client.get().uri("/api/v1/mapping/zones/z1/versions").header("Authorization", viewer).exchange().expectStatus().isOk();
+        client.post().uri("/api/v1/files/evidence/f1").header("Authorization", viewer)
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
+        String uploader = "Bearer " + permissionToken("op-3", "file:upload");
+        client.get().uri("/api/v1/files/snapshots/url?key=cameras/c1/x.jpg").header("Authorization", uploader).exchange().expectStatus().isForbidden();
+        // a driver reaches the evidence URL of an own fine (the service checks ownership), but not the snapshots
+        client.get().uri("/api/v1/files/evidence/f1/url?key=fines/f1/x.jpg").header("Authorization", "Bearer " + validToken("driver", "d-2"))
+                .exchange().expectStatus().isOk();
+        client.get().uri("/api/v1/files/snapshots/url?key=cameras/c1/x.jpg").header("Authorization", "Bearer " + validToken("driver", "d-2"))
+                .exchange().expectStatus().isForbidden();
+    }
+
     // ── real JWT validation at the edge ──────────────────────────────────────────
 
     @Test
