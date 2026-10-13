@@ -115,6 +115,10 @@ spring:
               uri: ${EVENT_STREAMING_URL:http://localhost:8084}
               predicates:
                 - Path=/api/v1/events/**
+              filters:
+                # The gateway answers CORS itself. event-streaming has its own CORS filter that rejects every request carrying
+                # an Origin it does not list (SSE_ALLOWED_ORIGINS, empty by default), so browsers got 403 on the stream.
+                - RemoveRequestHeader=Origin
               metadata:
                 response-timeout: -1
 
