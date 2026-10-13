@@ -54,11 +54,24 @@ spring:
                     redis-rate-limiter.replenishRate: 10
                     redis-rate-limiter.burstCapacity: 20
 
+            # ── Profile of the signed-in user (any role) is owned by authentication-service ──
+            - id: user-profile
+              uri: ${AUTH_SERVICE_URL:http://localhost:8085}
+              predicates:
+                - Path=/api/v1/users/**
+              filters:
+                - name: RequestSize
+                  args: { maxSize: 64KB }
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 10
+                    redis-rate-limiter.burstCapacity: 20
+
             # ── Enforcement ──
             - id: rule-engine
               uri: ${RULE_ENGINE_URL:http://localhost:8081}
               predicates:
-                - Path=/api/v1/violations/**,/api/v1/permits/**
+                - Path=/api/v1/violations/**,/api/v1/permits/**,/api/v1/fines/**
               filters:
                 - name: RequestSize
                   args: { maxSize: 1MB }
@@ -252,6 +265,10 @@ parkview:
       - { paths: ["/api/v1/access/me/**"], methods: [GET], access: AUTHENTICATED }
       - { paths: ["/api/v1/access/**"], methods: [GET, HEAD], access: PERMISSION, permission: "access:read" }
       - { paths: ["/api/v1/access/**"], access: PERMISSION, permission: "access:manage" }     # every other method
+      # fines (drivers read their own, staff by zone/plate) and the profile of the signed-in user (the service uses the token
+      # subject): any valid token here, the services decide on ownership and zones
+      - { paths: ["/api/v1/fines/**"], access: AUTHENTICATED }
+      - { paths: ["/api/v1/users/**"], access: AUTHENTICATED }
       # operator functions: one permission each (ADR 0002). Tokens without a permissions claim get the role's
       # defaults while parkview.security.legacy-role-fallback is true.
       - { paths: ["/api/v1/ai/**"], access: PERMISSION, permission: "ai:use" }
@@ -264,6 +281,15 @@ parkview:
       - { paths: ["/api/v1/violations/zone/**"], access: PERMISSION, permission: "violation:read" }
       - { paths: ["/api/v1/violations/*/resolve"], access: PERMISSION, permission: "violation:resolve" }
       - { paths: ["/api/v1/events/status", "/api/v1/events/stream/operator"], access: PERMISSION, permission: "stream:operator" }
+      # map history is for operators; every other mapping GET (zones, spots, geojson) is read by drivers and stays open. The overlap check
+      # (POST /zones/check-overlap) accepts mapping:view, zone:write or spot:write: the service decides.
+      - { paths: ["/api/v1/mapping/zones/*/versions", "/api/v1/mapping/zones/*/changes", "/api/v1/mapping/spots/*/changes"], methods: [GET, HEAD], access: PERMISSION, permission: "mapping:view" }
+      # files: uploads and snapshot reads are permission-gated; GET /files/evidence/*/url is NOT, the owner of a fine (a driver) needs it
+      # (the service wants file:view of staff and ownership of drivers)
+      - { paths: ["/api/v1/files/evidence/*", "/api/v1/files/snapshots/*"], methods: [POST], access: PERMISSION, permission: "file:upload" }
+      - { paths: ["/api/v1/files/snapshots/**"], methods: [GET, HEAD], access: PERMISSION, permission: "file:view" }
       - { paths: ["/api/v1/mapping/**"], methods: [POST, PUT, PATCH, DELETE], access: PERMISSION, permission: "spot:write" }
+      # the overlap check is a read in disguise: the service accepts mapping:view, zone:write or spot:write (a single gateway permission cannot say "any of")
+      - { paths: ["/api/v1/zones/check-overlap"], methods: [POST], access: AUTHENTICATED }
       # zone geometry drives billing: its own permission (admin only by default)
       - { paths: ["/api/v1/zones", "/api/v1/zones/**"], methods: [POST, PUT, PATCH, DELETE], access: PERMISSION, permission: "zone:write" }
