@@ -35,7 +35,8 @@ import java.security.MessageDigest;
 /**
  * Edge security: validate the Supabase JWT (ES256 through JWKS, issuer + audience), answer CORS before
  * authorisation, and apply the declarative rules from {@code parkview.gateway.rules}.
- * Roles: ADMIN (implies OPERATOR), OPERATOR, DRIVER from {@code app_metadata.role}.
+ * Authorities: roles ADMIN (implies OPERATOR), OPERATOR, DRIVER from {@code app_metadata.role} and one authority per
+ * entry of {@code app_metadata.permissions} (see {@link ParkviewJwtConverter}); rules use either.
  */
 @Configuration
 @EnableWebFluxSecurity
@@ -88,7 +89,7 @@ public class SecurityConfig {
                                 exchange, objectMapper, HttpStatus.FORBIDDEN, "Forbidden", "You are not allowed to perform this action")))
                 .oauth2ResourceServer(o -> o
                         .bearerTokenConverter(new SseTokenBearerConverter(gateway))
-                        .jwt(j -> j.jwtDecoder(jwtDecoder).jwtAuthenticationConverter(ParkviewJwtConverter.create())));
+                        .jwt(j -> j.jwtDecoder(jwtDecoder).jwtAuthenticationConverter(ParkviewJwtConverter.create(security.legacyRoleFallback()))));
 
         http.authorizeExchange(ex -> {
             ex.pathMatchers(HttpMethod.OPTIONS, "/**").permitAll();
@@ -103,10 +104,10 @@ public class SecurityConfig {
             for (GatewayProperties.Rule rule : gateway.rules()) {
                 String[] paths = rule.paths().toArray(String[]::new);
                 if (rule.methods().isEmpty()) {
-                    apply(rule.access(), ex.pathMatchers(paths));
+                    apply(rule, ex.pathMatchers(paths));
                 } else {
                     for (String method : rule.methods()) {
-                        apply(rule.access(), ex.pathMatchers(HttpMethod.valueOf(method), paths));
+                        apply(rule, ex.pathMatchers(HttpMethod.valueOf(method), paths));
                     }
                 }
             }
@@ -115,12 +116,13 @@ public class SecurityConfig {
         return http.build();
     }
 
-    private static void apply(GatewayProperties.Access access, ServerHttpSecurity.AuthorizeExchangeSpec.Access spec) {
-        switch (access) {
+    private static void apply(GatewayProperties.Rule rule, ServerHttpSecurity.AuthorizeExchangeSpec.Access spec) {
+        switch (rule.access()) {
             case PUBLIC -> spec.permitAll();
             case AUTHENTICATED -> spec.authenticated();
             case OPERATOR -> spec.hasRole("OPERATOR");
             case ADMIN -> spec.hasRole("ADMIN");
+            case PERMISSION -> spec.hasAuthority(rule.permission());
         }
     }
 

@@ -41,6 +41,19 @@ spring:
                     redis-rate-limiter.replenishRate: 10
                     redis-rate-limiter.burstCapacity: 20
 
+            # ── Access management (roles, grants, audit) is owned by authentication-service ──
+            - id: access-service
+              uri: ${AUTH_SERVICE_URL:http://localhost:8085}
+              predicates:
+                - Path=/api/v1/access/**
+              filters:
+                - name: RequestSize
+                  args: { maxSize: 64KB }
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 10
+                    redis-rate-limiter.burstCapacity: 20
+
             # ── Enforcement ──
             - id: rule-engine
               uri: ${RULE_ENGINE_URL:http://localhost:8081}
@@ -206,6 +219,8 @@ parkview:
     issuer: ${SUPABASE_URL}/auth/v1
     audience: ${SUPABASE_AUDIENCE:authenticated}
     internal-api-key: ${INTERNAL_API_KEY:}
+    # Tokens without app_metadata.permissions get the default permissions of their role (ADR 0002 rollout). Turn off once all tokens carry the claim.
+    legacy-role-fallback: ${LEGACY_ROLE_FALLBACK:true}
 
   gateway:
     docs-enabled: ${DOCS_ENABLED:false}
@@ -233,12 +248,22 @@ parkview:
       - { paths: ["/api/v1/payments/webhook"], methods: [POST], access: PUBLIC }
       - { paths: ["/api/v1/cameras/ingest", "/api/v1/cameras/heartbeat"], methods: [POST], access: PUBLIC }
       - { paths: ["/api/v1/sessions/count/active"], methods: [GET], access: PUBLIC }
-      # operator/admin only
-      - { paths: ["/api/v1/ai/**", "/api/v1/cameras/admin/**", "/api/v1/lookup/**", "/api/v1/permits/**"], access: OPERATOR }
-      - { paths: ["/api/v1/sessions/zone/**", "/api/v1/sessions/start"], access: OPERATOR }
-      - { paths: ["/api/v1/sessions/*/pay"], methods: [PATCH], access: OPERATOR }
-      - { paths: ["/api/v1/violations/zone/**", "/api/v1/violations/*/resolve"], access: OPERATOR }
-      - { paths: ["/api/v1/events/status", "/api/v1/events/stream/operator"], access: OPERATOR }
-      - { paths: ["/api/v1/mapping/**"], methods: [POST, PUT, PATCH, DELETE], access: OPERATOR }
-      # zone geometry drives billing: admin only for writes
-      - { paths: ["/api/v1/zones", "/api/v1/zones/**"], methods: [POST, PUT, PATCH, DELETE], access: ADMIN }
+      # access management: any signed-in user may read their own effective access, the rest is permission-gated
+      - { paths: ["/api/v1/access/me/**"], methods: [GET], access: AUTHENTICATED }
+      - { paths: ["/api/v1/access/**"], methods: [GET, HEAD], access: PERMISSION, permission: "access:read" }
+      - { paths: ["/api/v1/access/**"], access: PERMISSION, permission: "access:manage" }     # every other method
+      # operator functions: one permission each (ADR 0002). Tokens without a permissions claim get the role's
+      # defaults while parkview.security.legacy-role-fallback is true.
+      - { paths: ["/api/v1/ai/**"], access: PERMISSION, permission: "ai:use" }
+      - { paths: ["/api/v1/cameras/admin/**"], access: PERMISSION, permission: "camera:admin" }
+      - { paths: ["/api/v1/lookup/**"], access: PERMISSION, permission: "lookup:vehicle" }
+      - { paths: ["/api/v1/permits/**"], access: PERMISSION, permission: "permit:manage" }
+      - { paths: ["/api/v1/sessions/zone/**"], access: PERMISSION, permission: "session:read" }
+      - { paths: ["/api/v1/sessions/start"], access: PERMISSION, permission: "session:manage" }
+      - { paths: ["/api/v1/sessions/*/pay"], methods: [PATCH], access: PERMISSION, permission: "session:manage" }
+      - { paths: ["/api/v1/violations/zone/**"], access: PERMISSION, permission: "violation:read" }
+      - { paths: ["/api/v1/violations/*/resolve"], access: PERMISSION, permission: "violation:resolve" }
+      - { paths: ["/api/v1/events/status", "/api/v1/events/stream/operator"], access: PERMISSION, permission: "stream:operator" }
+      - { paths: ["/api/v1/mapping/**"], methods: [POST, PUT, PATCH, DELETE], access: PERMISSION, permission: "spot:write" }
+      # zone geometry drives billing: its own permission (admin only by default)
+      - { paths: ["/api/v1/zones", "/api/v1/zones/**"], methods: [POST, PUT, PATCH, DELETE], access: PERMISSION, permission: "zone:write" }

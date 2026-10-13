@@ -1,5 +1,6 @@
 package com.parkview.gateway.config;
 
+import com.parkview.gateway.security.Permissions;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -36,17 +37,35 @@ public record GatewayProperties(
         PUBLIC,
         AUTHENTICATED,
         OPERATOR,
-        ADMIN
+        ADMIN,
+        /** the authority named by {@link Rule#permission()}, e.g. {@code zone:write} */
+        PERMISSION
     }
 
     /**
-     * @param paths   Ant patterns
-     * @param methods HTTP methods the rule applies to; empty = all
-     * @param access  required access level
+     * @param paths      Ant patterns
+     * @param methods    HTTP methods the rule applies to; empty = all
+     * @param access     required access level
+     * @param permission required permission, only with {@code access: PERMISSION} (and then mandatory). Must be in
+     *                   the catalogue ({@link Permissions}); an unknown name fails the startup instead of silently
+     *                   guarding nothing or locking everyone out
      */
     public record Rule(
             @NotEmpty List<String> paths,
             @DefaultValue List<String> methods,
-            @NotNull Access access) {
+            @NotNull Access access,
+            String permission) {
+
+        public Rule {
+            if (access == Access.PERMISSION) {
+                if (!Permissions.isKnown(permission)) {
+                    throw new IllegalArgumentException("Rule " + paths + " requires permission '" + permission
+                            + "', which is not one of " + Permissions.sorted());
+                }
+            } else if (permission != null && !permission.isBlank()) {
+                throw new IllegalArgumentException("Rule " + paths + " sets permission '" + permission
+                        + "' but access is " + access + "; use access: PERMISSION");
+            }
+        }
     }
 }

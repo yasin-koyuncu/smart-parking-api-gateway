@@ -13,6 +13,9 @@ import org.springframework.validation.annotation.Validated;
  * @param audience       required {@code aud} claim
  * @param internalApiKey shared secret presented to internal endpoints (actuator metrics, AI service);
  *                       blank disables those features
+ * @param legacyRoleFallback while true, a token without {@code app_metadata.permissions} gets the default
+ *                       permissions of its role (rollout of ADR 0002); a token that has the claim, even
+ *                       empty, is never supplemented
  */
 @Validated
 @ConfigurationProperties("parkview.security")
@@ -20,7 +23,8 @@ public record SecurityProperties(
         @NotBlank String issuer,
         String jwksUri,
         @DefaultValue("authenticated") String audience,
-        String internalApiKey) {
+        String internalApiKey,
+        @DefaultValue("true") boolean legacyRoleFallback) {
 
     public String resolvedJwksUri() {
         return jwksUri == null || jwksUri.isBlank() ? issuer + "/.well-known/jwks.json" : jwksUri;
