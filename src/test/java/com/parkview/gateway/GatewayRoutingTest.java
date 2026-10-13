@@ -11,6 +11,7 @@ import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
+import com.parkview.gateway.security.Permissions;
 import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -35,7 +36,9 @@ import org.testcontainers.containers.GenericContainer;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -79,10 +82,14 @@ class GatewayRoutingTest {
     }
 
     private static String token(String role, String subject, String issuer, String audience, Instant expiresAt, ECKey key) {
+        return token(Map.of("role", role), subject, issuer, audience, expiresAt, key);
+    }
+
+    private static String token(Map<String, Object> appMetadata, String subject, String issuer, String audience, Instant expiresAt, ECKey key) {
         try {
             JWTClaimsSet claims = new JWTClaimsSet.Builder().issuer(issuer).subject(subject).audience(audience)
                     .issueTime(Date.from(Instant.now().minusSeconds(5))).expirationTime(Date.from(expiresAt))
-                    .claim("app_metadata", Map.of("role", role)).build();
+                    .claim("app_metadata", appMetadata).build();
             SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.ES256).keyID(key.getKeyID()).build(), claims);
             jwt.sign(new ECDSASigner(key));
             return jwt.serialize();
@@ -93,6 +100,11 @@ class GatewayRoutingTest {
 
     private static String validToken(String role, String subject) {
         return token(role, subject, "http://issuer.test/auth/v1", "authenticated", Instant.now().plusSeconds(300), SIGNING_KEY);
+    }
+
+    private static String permissionToken(String subject, String... permissions) {
+        return token(Map.of("permissions", List.of(permissions)), subject, "http://issuer.test/auth/v1", "authenticated",
+                Instant.now().plusSeconds(300), SIGNING_KEY);
     }
 
     @BeforeAll
@@ -138,11 +150,13 @@ class GatewayRoutingTest {
         RECORDED.clear();
     }
 
+    /** A signed-in user with the roles and the default permissions of {@code role} (what the converter grants a legacy token). */
     private WebTestClient as(String role, String subject) {
+        List<String> authorities = new ArrayList<>(List.of("admin".equals(role) ? new String[]{"ROLE_ADMIN", "ROLE_OPERATOR"} : new String[]{"ROLE_" + role.toUpperCase()}));
+        authorities.addAll(Permissions.defaultsFor(role));
         return client.mutateWith(SecurityMockServerConfigurers.mockJwt()
                 .jwt(j -> j.subject(subject).claim("app_metadata", Map.of("role", role)))
-                .authorities(AuthorityUtils.createAuthorityList(
-                        "admin".equals(role) ? new String[]{"ROLE_ADMIN", "ROLE_OPERATOR"} : new String[]{"ROLE_" + role.toUpperCase()})));
+                .authorities(AuthorityUtils.createAuthorityList(authorities.toArray(String[]::new))));
     }
 
     private RecordedRequest upstreamRequest() throws InterruptedException {
@@ -234,6 +248,44 @@ class GatewayRoutingTest {
         RecordedRequest upstream = upstreamRequest();
         assertThat(upstream.getPath()).isEqualTo("/anpr/read");
         assertThat(upstream.getHeaders().values("X-Internal-Api-Key")).containsExactly("test-internal-key");
+    }
+
+    // ── permissions (ADR 0002), real ES256 tokens through the whole stack ───────
+
+    @Test
+    void permissionOnlyTokensOpenExactlyTheirRoutes() throws Exception {
+        String zoneWriter = "Bearer " + permissionToken("zm-1", "zone:write", "session:read");
+        client.post().uri("/api/v1/zones").header("Authorization", zoneWriter).contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
+                .exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/zones");
+        client.get().uri("/api/v1/sessions/zone/z1").header("Authorization", zoneWriter).exchange().expectStatus().isOk();
+        client.patch().uri("/api/v1/violations/" + java.util.UUID.randomUUID() + "/resolve").header("Authorization", zoneWriter)
+                .exchange().expectStatus().isForbidden();
+        client.get().uri("/api/v1/access/roles").header("Authorization", zoneWriter).exchange().expectStatus().isForbidden();
+    }
+
+    @Test
+    void legacyTokensFallBackToRoleDefaultsButAnEmptyPermissionsClaimDoesNot() {
+        client.post().uri("/api/v1/zones").header("Authorization", "Bearer " + validToken("admin", "ad-9"))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isOk();
+        String revoked = token(Map.of("role", "admin", "permissions", List.of()), "ad-8", "http://issuer.test/auth/v1", "authenticated",
+                Instant.now().plusSeconds(300), SIGNING_KEY);
+        client.post().uri("/api/v1/zones").header("Authorization", "Bearer " + revoked)
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
+    }
+
+    @Test
+    void accessApiIsRoutedToTheAuthenticationServiceAndGatedByAccessPermissions() throws Exception {
+        client.get().uri("/api/v1/access/roles").header("Authorization", "Bearer " + permissionToken("ad-1", "access:read"))
+                .exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/access/roles");
+        client.post().uri("/api/v1/access/roles").header("Authorization", "Bearer " + permissionToken("ad-1", "access:read"))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
+        client.post().uri("/api/v1/access/roles").header("Authorization", "Bearer " + permissionToken("ad-1", "access:manage"))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isOk();
+        client.get().uri("/api/v1/access/me/access").header("Authorization", "Bearer " + validToken("driver", "d-1"))
+                .exchange().expectStatus().isOk();
+        client.get().uri("/api/v1/access/roles").exchange().expectStatus().isUnauthorized();
     }
 
     // ── real JWT validation at the edge ──────────────────────────────────────────
