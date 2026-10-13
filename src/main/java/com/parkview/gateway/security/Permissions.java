@@ -21,7 +21,7 @@ public final class Permissions {
     public static final Set<String> ALL = Set.of(
             "mapping:view", "zone:write", "spot:write", "session:read", "session:manage", "violation:read", "violation:resolve",
             "permit:manage", "lookup:vehicle", "file:upload", "file:view", "stream:operator", "camera:admin", "ai:use",
-            "access:read", "access:manage");
+            "session:correct", "fine:manage", "access:read", "access:manage");
 
     /** Keyed by lower-case role name (admin | operator | driver). */
     public static final Map<String, Set<String>> DEFAULTS_BY_ROLE = Map.of(

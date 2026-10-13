@@ -47,11 +47,13 @@ Declared in `application.yml` under `parkview.gateway.rules` (first match wins, 
 
 The operator and admin functions are guarded by permissions, one per function (`/ai/**` `ai:use`, `/cameras/admin/**` `camera:admin`,
 `/lookup/**` `lookup:vehicle`, `/permits/**` `permit:manage`, `sessions/zone/**` `session:read`, session start and pay `session:manage`,
+`GET sessions/search` and `GET sessions/*/history` `session:read`, `POST sessions/*/end`, `POST sessions/*/void` and `PATCH sessions/*` (one segment, so not `.../pay`) `session:correct`,
+`POST fines/*/void` and `POST fines/*/mark-paid` `fine:manage`, `GET fines/*/history` `violation:read`,
 `violations/zone/**` `violation:read`, `violations/*/resolve` `violation:resolve`, `events/status` and `events/stream/operator`
 `stream:operator`, mapping writes `spot:write`, zone writes `zone:write`, map history GETs `mapping:view`, evidence and snapshot uploads `file:upload`, snapshot GETs `file:view`,
 `/access/**` `access:read` for GET and `access:manage` for the rest). Deliberately **not** gated here, because one gateway permission cannot express them: `GET /files/evidence/*/url`
 (owner of the fine, or staff with `file:view`, decided by file-service), `POST /zones/check-overlap` (service accepts `mapping:view`, `zone:write` or `spot:write`, so it is a plain
-authenticated rule ahead of the zone-write rule), the other mapping GETs (drivers read zones and spots), `/fines/**` and `/users/**` (any valid token, the services check ownership).
+authenticated rule ahead of the zone-write rule), the other mapping GETs (drivers read zones and spots), the rest of `/fines/**` and `/users/**` (any valid token, the services check ownership).
 `permission` is only valid with `access: PERMISSION` and must be in the catalogue (`Permissions`, mirrors
 `smart-parking-e2e/contracts/permissions.json`): a misspelt or unknown name **fails the startup** instead of guarding nothing.
 

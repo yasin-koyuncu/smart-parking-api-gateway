@@ -267,6 +267,9 @@ parkview:
       - { paths: ["/api/v1/access/**"], access: PERMISSION, permission: "access:manage" }     # every other method
       # fines (drivers read their own, staff by zone/plate) and the profile of the signed-in user (the service uses the token
       # subject): any valid token here, the services decide on ownership and zones
+      # staff corrections of fines (ADR 0002): first, so the catch-all below does not capture them
+      - { paths: ["/api/v1/fines/*/void", "/api/v1/fines/*/mark-paid"], methods: [POST], access: PERMISSION, permission: "fine:manage" }
+      - { paths: ["/api/v1/fines/*/history"], methods: [GET], access: PERMISSION, permission: "violation:read" }
       - { paths: ["/api/v1/fines/**"], access: AUTHENTICATED }
       - { paths: ["/api/v1/users/**"], access: AUTHENTICATED }
       # operator functions: one permission each (ADR 0002). Tokens without a permissions claim get the role's
@@ -278,6 +281,11 @@ parkview:
       - { paths: ["/api/v1/sessions/zone/**"], access: PERMISSION, permission: "session:read" }
       - { paths: ["/api/v1/sessions/start"], access: PERMISSION, permission: "session:manage" }
       - { paths: ["/api/v1/sessions/*/pay"], methods: [PATCH], access: PERMISSION, permission: "session:manage" }
+      # session search and history are reads (a single segment under /sessions would otherwise be an id); corrections need their own permission.
+      # PATCH /sessions/* is one path segment, so it never captures PATCH /sessions/*/pay above.
+      - { paths: ["/api/v1/sessions/search", "/api/v1/sessions/*/history"], methods: [GET], access: PERMISSION, permission: "session:read" }
+      - { paths: ["/api/v1/sessions/*/end", "/api/v1/sessions/*/void"], methods: [POST], access: PERMISSION, permission: "session:correct" }
+      - { paths: ["/api/v1/sessions/*"], methods: [PATCH], access: PERMISSION, permission: "session:correct" }
       - { paths: ["/api/v1/violations/zone/**"], access: PERMISSION, permission: "violation:read" }
       - { paths: ["/api/v1/violations/*/resolve"], access: PERMISSION, permission: "violation:resolve" }
       - { paths: ["/api/v1/events/status", "/api/v1/events/stream/operator"], access: PERMISSION, permission: "stream:operator" }

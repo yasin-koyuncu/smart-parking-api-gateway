@@ -79,10 +79,10 @@ class ParkviewJwtConverterTest {
 
     @Test
     void absentClaimFallsBackToTheRoleDefaultsOnlyWhileTheFallbackIsOn() {
-        assertThat(permissions(jwt(Map.of("role", "admin")), true)).containsExactlyInAnyOrderElementsOf(Permissions.ALL).hasSize(16);
+        assertThat(permissions(jwt(Map.of("role", "admin")), true)).containsExactlyInAnyOrderElementsOf(Permissions.ALL).hasSize(18);
         assertThat(permissions(jwt(Map.of("role", "Operator")), true))
                 .containsExactlyInAnyOrderElementsOf(Permissions.DEFAULTS_BY_ROLE.get("operator"))
-                .doesNotContain("zone:write", "access:read", "access:manage");
+                .doesNotContain("zone:write", "access:read", "access:manage", "session:correct", "fine:manage");
         assertThat(permissions(jwt(Map.of("role", "driver")), true)).isEmpty();
         assertThat(permissions(jwt(Map.of("role", "superuser")), true)).isEmpty();
         assertThat(permissions(jwt(null), true)).isEmpty();

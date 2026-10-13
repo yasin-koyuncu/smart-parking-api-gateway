@@ -44,7 +44,15 @@ class AuthorizationMatrixTest {
                 new Guarded(HttpMethod.GET, "/api/v1/sessions/zone/z1", "session:read"),
                 new Guarded(HttpMethod.POST, "/api/v1/sessions/start", "session:manage"),
                 new Guarded(HttpMethod.PATCH, "/api/v1/sessions/7/pay", "session:manage"),
+                new Guarded(HttpMethod.GET, "/api/v1/sessions/search", "session:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/sessions/7/history", "session:read"),
+                new Guarded(HttpMethod.POST, "/api/v1/sessions/7/end", "session:correct"),
+                new Guarded(HttpMethod.POST, "/api/v1/sessions/7/void", "session:correct"),
+                new Guarded(HttpMethod.PATCH, "/api/v1/sessions/7", "session:correct"),
                 new Guarded(HttpMethod.GET, "/api/v1/violations/zone/z1", "violation:read"),
+                new Guarded(HttpMethod.POST, "/api/v1/fines/f1/void", "fine:manage"),
+                new Guarded(HttpMethod.POST, "/api/v1/fines/f1/mark-paid", "fine:manage"),
+                new Guarded(HttpMethod.GET, "/api/v1/fines/f1/history", "violation:read"),
                 new Guarded(HttpMethod.PATCH, "/api/v1/violations/7/resolve", "violation:resolve"),
                 new Guarded(HttpMethod.GET, "/api/v1/events/status", "stream:operator"),
                 new Guarded(HttpMethod.GET, "/api/v1/events/stream/operator", "stream:operator"),
@@ -127,6 +135,39 @@ class AuthorizationMatrixTest {
     }
 
     @Test
+    void correctionsNeedTheirOwnPermissionAndDoNotLeakIntoTheManageRoutes() {
+        Map<String, Object> manager = permissionsOnly(Set.of("session:manage", "session:read", "violation:read", "violation:resolve"));
+        // session:manage still starts a session and marks it paid, but corrects nothing
+        assertThat(status(HttpMethod.POST, "/api/v1/sessions/start", manager)).isEqualTo(200);
+        assertThat(status(HttpMethod.PATCH, "/api/v1/sessions/7/pay", manager)).isEqualTo(200);
+        for (String path : List.of("/api/v1/sessions/7/end", "/api/v1/sessions/7/void")) {
+            assertThat(status(HttpMethod.POST, path, manager)).as(path).isEqualTo(403);
+        }
+        assertThat(status(HttpMethod.PATCH, "/api/v1/sessions/7", manager)).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/fines/f1/void", manager)).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/fines/f1/mark-paid", manager)).isEqualTo(403);
+
+        // session:correct alone is not session:manage: PATCH .../pay (two segments) is not captured by PATCH /sessions/*
+        Map<String, Object> corrector = permissionsOnly(Set.of("session:correct"));
+        assertThat(status(HttpMethod.PATCH, "/api/v1/sessions/7", corrector)).isEqualTo(200);
+        assertThat(status(HttpMethod.PATCH, "/api/v1/sessions/7/pay", corrector)).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/sessions/start", corrector)).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/sessions/search", corrector)).isEqualTo(403);
+    }
+
+    @Test
+    void sessionSearchIsNotAnIdLookupAndOtherSessionReadsStayAuthenticatedOnly() {
+        Map<String, Object> driver = Map.of("role", "driver", "permissions", List.of());
+        assertThat(status(HttpMethod.GET, "/api/v1/sessions/search", driver)).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/sessions/7", driver)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/sessions/7/history", driver)).isEqualTo(403);
+        // the finer rules apply to the listed methods only
+        assertThat(status(HttpMethod.GET, "/api/v1/sessions/7/end", driver)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/void", driver)).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/fines/f1/history", driver)).isEqualTo(200);
+    }
+
+    @Test
     void permissionNamesAreMatchedExactlyNotByPrefixOrCase() {
         for (String near : List.of("zone", "zone:", "zone:*", "Zone:Write", "zone:write ", "zone:writer", "*")) {
             assertThat(status(HttpMethod.POST, "/api/v1/zones", Map.of("permissions", List.of(near)))).as(near).isEqualTo(403);
@@ -159,12 +200,21 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.PATCH, "/api/v1/violations/7/resolve", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/mapping/spots", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/events/stream/operator", operator)).isEqualTo(200);
+        // not in the operator defaults: corrections of sessions and fines, zone writes (billing) and access management
+        assertThat(status(HttpMethod.POST, "/api/v1/sessions/7/void", operator)).isEqualTo(403);
+        assertThat(status(HttpMethod.PATCH, "/api/v1/sessions/7", operator)).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/fines/f1/void", operator)).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/fines/f1/mark-paid", operator)).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/sessions/search", operator)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/history", operator)).isEqualTo(200);
         // not in the operator defaults: zone writes (billing) and access management
         assertThat(status(HttpMethod.POST, "/api/v1/zones", operator)).isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/access/roles", operator)).isEqualTo(403);
         assertThat(status(HttpMethod.POST, "/api/v1/access/roles", operator)).isEqualTo(403);
 
         Map<String, Object> admin = Map.of("role", "admin");
+        assertThat(status(HttpMethod.POST, "/api/v1/sessions/7/void", admin)).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/fines/f1/mark-paid", admin)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/zones", admin)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/access/roles", admin)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/events/stream/operator", admin)).isEqualTo(200);

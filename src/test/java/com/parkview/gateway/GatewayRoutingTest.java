@@ -289,6 +289,41 @@ class GatewayRoutingTest {
     }
 
     @Test
+    void sessionAndFineCorrectionsAreRoutedAndNeedTheirOwnPermissions() throws Exception {
+        String corrector = "Bearer " + permissionToken("sv-1", "session:correct", "fine:manage");
+        String id = java.util.UUID.randomUUID().toString();
+        client.post().uri("/api/v1/sessions/" + id + "/void").header("Authorization", corrector).contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
+                .exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/sessions/" + id + "/void");
+        client.patch().uri("/api/v1/sessions/" + id).header("Authorization", corrector).contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
+                .exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/sessions/" + id);
+        client.post().uri("/api/v1/fines/" + id + "/mark-paid").header("Authorization", corrector).contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
+                .exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/fines/" + id + "/mark-paid");
+        // the correction permissions do not open the reads or the payment route
+        client.get().uri("/api/v1/sessions/search?plate=ABC123").header("Authorization", corrector).exchange().expectStatus().isForbidden();
+        client.patch().uri("/api/v1/sessions/" + id + "/pay").header("Authorization", corrector).exchange().expectStatus().isForbidden();
+        client.get().uri("/api/v1/fines/" + id + "/history").header("Authorization", corrector).exchange().expectStatus().isForbidden();
+
+        String reader = "Bearer " + permissionToken("sv-2", "session:read", "violation:read");
+        client.get().uri("/api/v1/sessions/search?plate=ABC123").header("Authorization", reader).exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/sessions/search?plate=ABC123");
+        client.get().uri("/api/v1/sessions/" + id + "/history").header("Authorization", reader).exchange().expectStatus().isOk();
+        client.get().uri("/api/v1/fines/" + id + "/history").header("Authorization", reader).exchange().expectStatus().isOk();
+        client.post().uri("/api/v1/sessions/" + id + "/end").header("Authorization", reader).contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
+                .exchange().expectStatus().isForbidden();
+        client.post().uri("/api/v1/fines/" + id + "/void").header("Authorization", reader).contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
+                .exchange().expectStatus().isForbidden();
+
+        // a default operator (legacy token) cannot correct, an admin can
+        as("operator", "op-1").post().uri("/api/v1/sessions/" + id + "/end").contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
+                .exchange().expectStatus().isForbidden();
+        as("admin", "ad-1").post().uri("/api/v1/fines/" + id + "/void").contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
+                .exchange().expectStatus().isOk();
+    }
+
+    @Test
     void finesAndTheUserProfileAreRoutedForAnySignedInUser() throws Exception {
         client.get().uri("/api/v1/fines/plate/ABC123").header("Authorization", "Bearer " + validToken("driver", "d-1"))
                 .exchange().expectStatus().isOk();
