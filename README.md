@@ -14,6 +14,15 @@ Browser / camera --HTTPS--> api-gateway --> session | rule | mapping | payment |
 The services validate the JWT again and enforce object ownership (their own zones / plates); the gateway keeps
 unauthorised traffic away from them and gives every error the same shape.
 
+## Structure
+
+Code layout (`com.parkview.gateway`):
+
+* `config`: `SecurityConfig` (chain: CORS, headers, problem+json errors, actuator rules), `JwtDecoderConfig` (ES256/JWKS decoder with issuer and audience), `CorsConfig`, `RedisConfig`, `DocsRoutesConfig` and the `@ConfigurationProperties` records.
+* `security`: `RuleAuthorizer` (applies `parkview.gateway.rules`), `AudienceValidator`, `ParkviewJwtConverter` (claims to authorities), `Permissions` (catalogue), `SseTokenPaths` + `SseTokenBearerConverter` (`?token=` on SSE paths), `RoleHeader` (value of `X-User-Role`).
+* `filter`: global route filters (`SseTokenForwardFilter` -2, `AuthForwardFilter` -1, `AccessLogFilter`).
+* `web`: edge headers, error handler, problem+json writer.
+
 ## Routing table
 
 | Path prefix | Service | Notes |
