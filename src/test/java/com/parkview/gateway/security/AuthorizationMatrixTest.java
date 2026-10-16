@@ -38,6 +38,10 @@ class AuthorizationMatrixTest {
         return Stream.of(
                 new Guarded(HttpMethod.POST, "/api/v1/ai/anpr/read", "ai:use"),
                 new Guarded(HttpMethod.GET, "/api/v1/cameras/admin/snapshot-url", "camera:admin"),
+                new Guarded(HttpMethod.POST, "/api/v1/cameras/c1/capture", "ai:use"),
+                new Guarded(HttpMethod.GET, "/api/v1/detections", "violation:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/detections/d1", "violation:read"),
+                new Guarded(HttpMethod.PATCH, "/api/v1/detections/d1/review", "violation:resolve"),
                 new Guarded(HttpMethod.GET, "/api/v1/lookup/plate/ABC123", "lookup:vehicle"),
                 new Guarded(HttpMethod.POST, "/api/v1/permits", "permit:manage"),
                 new Guarded(HttpMethod.DELETE, "/api/v1/permits/1", "permit:manage"),
@@ -281,6 +285,57 @@ class AuthorizationMatrixTest {
         }
         assertThat(status(HttpMethod.PUT, "/api/v1/users/me", Map.of("role", "driver"))).isEqualTo(200);
         assertThat(status(HttpMethod.PUT, "/api/v1/users/me", null)).isEqualTo(401);
+    }
+
+    // ── cameras, detections, notifications, own plates ──────────────────────────
+
+    @Test
+    void cameraListIsLeftToTheServiceAndTheDeviceAndAdminRulesAreNotShadowed() {
+        Map<String, Object> driver = Map.of("role", "driver", "permissions", List.of());
+        // GET /cameras: ingestion-service wants camera:admin OR stream:operator with zone scope, so any valid token passes the edge
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras", null)).isEqualTo(401);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras", driver)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras", permissionsOnly(Set.of("stream:operator")))).isEqualTo(200);
+        // device endpoints stay public (POST only), the admin rule still guards cameras/admin/**
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/ingest", null)).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/heartbeat", null)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/ingest", null)).isEqualTo(401);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/admin/snapshot-url", permissionsOnly(Set.of("ai:use")))).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/admin/capture", permissionsOnly(Set.of("ai:use")))).as("camera id admin stays under the admin rule").isEqualTo(403);
+        // capture is POST only and needs ai:use, not camera:admin; `*` is one segment, so deeper paths are not capture
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/capture", permissionsOnly(Set.of("camera:admin")))).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/capture", null)).isEqualTo(401);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/capture", driver)).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/x/capture", driver)).isEqualTo(200);
+    }
+
+    @Test
+    void detectionReadsAndReviewsAreGuardedByTheirOwnPermission() {
+        // reading the queue does not allow deciding, and the other way round
+        assertThat(status(HttpMethod.PATCH, "/api/v1/detections/d1/review", permissionsOnly(Set.of("violation:read")))).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/detections", permissionsOnly(Set.of("violation:resolve")))).isEqualTo(403);
+        assertThat(status(HttpMethod.HEAD, "/api/v1/detections", permissionsOnly(Set.of("violation:read")))).isEqualTo(200);
+        // default operator reads and reviews, a driver does neither
+        assertThat(status(HttpMethod.GET, "/api/v1/detections", Map.of("role", "operator"))).isEqualTo(200);
+        assertThat(status(HttpMethod.PATCH, "/api/v1/detections/d1/review", Map.of("role", "operator"))).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/detections", Map.of("role", "driver"))).isEqualTo(403);
+        assertThat(status(HttpMethod.PATCH, "/api/v1/detections/d1/review", Map.of("role", "driver"))).isEqualTo(403);
+    }
+
+    @Test
+    void notificationsAndOwnPlatesNeedOnlyAValidToken() {
+        Map<String, Object> driver = Map.of("role", "driver", "permissions", List.of());
+        record Call(HttpMethod method, String path) {
+        }
+        for (Call call : List.of(new Call(HttpMethod.GET, "/api/v1/notifications"), new Call(HttpMethod.PATCH, "/api/v1/notifications/n1/read"),
+                new Call(HttpMethod.POST, "/api/v1/notifications/read-all"), new Call(HttpMethod.PUT, "/api/v1/notifications/push-subscription"),
+                new Call(HttpMethod.DELETE, "/api/v1/notifications/push-subscription"), new Call(HttpMethod.POST, "/api/v1/notifications/test-push"),
+                new Call(HttpMethod.GET, "/api/v1/users/me/plates"), new Call(HttpMethod.POST, "/api/v1/users/me/plates"),
+                new Call(HttpMethod.DELETE, "/api/v1/users/me/plates/ABC123"))) {
+            assertThat(status(call.method(), call.path(), null)).as(call + " anonymous").isEqualTo(401);
+            assertThat(status(call.method(), call.path(), driver)).as(call + " driver").isEqualTo(200);
+            assertThat(status(call.method(), call.path(), Map.of("role", "operator", "permissions", List.of()))).as(call + " operator").isEqualTo(200);
+        }
     }
 
     // ── routes that stay open or role-free ──────────────────────────────────────

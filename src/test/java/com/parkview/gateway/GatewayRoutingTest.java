@@ -242,6 +242,69 @@ class GatewayRoutingTest {
     }
 
     @Test
+    void cameraListAndCaptureAreRewrittenForIngestionWithIdentityHeaders() throws Exception {
+        String viewer = "Bearer " + validToken("driver", "d-1");
+        client.get().uri("/api/v1/cameras?zoneId=z1").header("Authorization", viewer).exchange().expectStatus().isOk();
+        RecordedRequest list = upstreamRequest();
+        assertThat(list.getPath()).isEqualTo("/cameras?zoneId=z1");
+        assertThat(list.getHeader("X-User-Id")).isEqualTo("d-1");
+
+        client.post().uri("/api/v1/cameras/c1/capture").header("Authorization", "Bearer " + permissionToken("op-1", "ai:use"))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isOk();
+        RecordedRequest capture = upstreamRequest();
+        assertThat(capture.getPath()).isEqualTo("/cameras/c1/capture");
+        assertThat(capture.getHeader("X-User-Id")).isEqualTo("op-1");
+        client.post().uri("/api/v1/cameras/c1/capture").header("Authorization", "Bearer " + permissionToken("op-1", "camera:admin"))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
+        // the device rules are untouched by the new ones
+        client.post().uri("/api/v1/cameras/heartbeat").contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/cameras/heartbeat");
+    }
+
+    @Test
+    void detectionsAreRewrittenForIngestionAndKeptFromDrivers() throws Exception {
+        String id = java.util.UUID.randomUUID().toString();
+        as("operator", "op-1").get().uri("/api/v1/detections?status=pending&limit=20").exchange().expectStatus().isOk();
+        RecordedRequest list = upstreamRequest();
+        assertThat(list.getPath()).isEqualTo("/detections?status=pending&limit=20");   // bare path: no trailing slash
+        assertThat(list.getHeader("X-User-Id")).isEqualTo("op-1");
+        assertThat(list.getHeader("X-User-Role")).isEqualTo("operator");
+
+        client.patch().uri("/api/v1/detections/" + id + "/review").header("Authorization", "Bearer " + permissionToken("rv-1", "violation:resolve"))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"decision\":\"confirmed\"}").exchange().expectStatus().isOk();
+        RecordedRequest review = upstreamRequest();
+        assertThat(review.getPath()).isEqualTo("/detections/" + id + "/review");
+        assertThat(review.getMethod()).isEqualTo("PATCH");
+        assertThat(review.getHeader("X-User-Id")).isEqualTo("rv-1");
+
+        client.patch().uri("/api/v1/detections/" + id + "/review").header("Authorization", "Bearer " + permissionToken("rv-2", "violation:read"))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
+        as("driver", "d-1").get().uri("/api/v1/detections").exchange().expectStatus().isForbidden();
+        as("driver", "d-1").patch().uri("/api/v1/detections/" + id + "/review").contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
+        client.get().uri("/api/v1/detections").exchange().expectStatus().isUnauthorized();
+        assertThat(RECORDED.poll(300, TimeUnit.MILLISECONDS)).as("refused calls never reach ingestion").isNull();
+    }
+
+    @Test
+    void notificationsAndOwnPlatesAreRoutedForAnySignedInUser() throws Exception {
+        String driver = "Bearer " + validToken("driver", "d-1");
+        client.get().uri("/api/v1/notifications?unread=true").header("Authorization", driver).exchange().expectStatus().isOk();
+        RecordedRequest list = upstreamRequest();
+        assertThat(list.getPath()).isEqualTo("/api/v1/notifications?unread=true");
+        assertThat(list.getHeader("X-User-Id")).isEqualTo("d-1");
+        client.post().uri("/api/v1/notifications/read-all").header("Authorization", driver).exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/notifications/read-all");
+        client.put().uri("/api/v1/notifications/push-subscription").header("Authorization", driver)
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/notifications/push-subscription");
+        client.get().uri("/api/v1/users/me/plates").header("Authorization", driver).exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/users/me/plates");
+        client.delete().uri("/api/v1/users/me/plates/ABC123").header("Authorization", driver).exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/users/me/plates/ABC123");
+        client.get().uri("/api/v1/notifications").exchange().expectStatus().isUnauthorized();
+    }
+
+    @Test
     void aiRouteAddsTheServiceKeyAndIgnoresAClientProvidedOne() throws Exception {
         as("operator", "op-1").post().uri("/api/v1/ai/anpr/read").header("X-Internal-Api-Key", "client-guess")
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isOk();
