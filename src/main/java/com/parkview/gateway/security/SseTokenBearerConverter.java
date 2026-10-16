@@ -6,13 +6,8 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.server.resource.authentication.BearerTokenAuthenticationToken;
 import org.springframework.security.oauth2.server.resource.web.server.authentication.ServerBearerTokenAuthenticationConverter;
 import org.springframework.security.web.server.authentication.ServerAuthenticationConverter;
-import org.springframework.util.StringUtils;
 import org.springframework.web.server.ServerWebExchange;
-import org.springframework.web.util.pattern.PathPattern;
-import org.springframework.web.util.pattern.PathPatternParser;
 import reactor.core.publisher.Mono;
-
-import java.util.List;
 
 /**
  * Reads the bearer token from the Authorization header and - only for the configured SSE paths - from
@@ -22,11 +17,10 @@ import java.util.List;
 public class SseTokenBearerConverter implements ServerAuthenticationConverter {
 
     private final ServerBearerTokenAuthenticationConverter headerConverter = new ServerBearerTokenAuthenticationConverter();
-    private final List<PathPattern> ssePaths;
+    private final SseTokenPaths ssePaths;
 
     public SseTokenBearerConverter(GatewayProperties properties) {
-        PathPatternParser parser = new PathPatternParser();
-        this.ssePaths = properties.sseTokenPaths().stream().map(parser::parse).toList();
+        this.ssePaths = new SseTokenPaths(properties);
     }
 
     @Override
@@ -39,11 +33,9 @@ public class SseTokenBearerConverter implements ServerAuthenticationConverter {
         if (exchange.getRequest().getHeaders().containsKey(HttpHeaders.AUTHORIZATION)) {
             return Mono.empty();
         }
-        boolean ssePath = ssePaths.stream().anyMatch(p -> p.matches(exchange.getRequest().getPath().pathWithinApplication()));
-        String token = exchange.getRequest().getQueryParams().getFirst("token");
-        if (!ssePath || !StringUtils.hasText(token)) {
-            return Mono.empty();
-        }
-        return Mono.just(new BearerTokenAuthenticationToken(token));
+        return ssePaths.tokenOf(exchange.getRequest())
+                .<Authentication>map(BearerTokenAuthenticationToken::new)
+                .map(Mono::just)
+                .orElseGet(Mono::empty);
     }
 }

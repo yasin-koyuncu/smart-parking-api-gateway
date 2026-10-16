@@ -1,19 +1,15 @@
 package com.parkview.gateway.filter;
 
 import com.parkview.gateway.config.GatewayProperties;
+import com.parkview.gateway.security.SseTokenPaths;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.util.UriComponentsBuilder;
-import org.springframework.web.util.pattern.PathPattern;
-import org.springframework.web.util.pattern.PathPatternParser;
 import reactor.core.publisher.Mono;
-
-import java.util.List;
 
 /**
  * The SSE token is accepted from {@code ?token=} during authentication (see SseTokenBearerConverter).
@@ -23,19 +19,17 @@ import java.util.List;
 @Component
 public class SseTokenForwardFilter implements GlobalFilter, Ordered {
 
-    private final List<PathPattern> ssePaths;
+    private final SseTokenPaths ssePaths;
 
     public SseTokenForwardFilter(GatewayProperties properties) {
-        PathPatternParser parser = new PathPatternParser();
-        this.ssePaths = properties.sseTokenPaths().stream().map(parser::parse).toList();
+        this.ssePaths = new SseTokenPaths(properties);
     }
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         var request = exchange.getRequest();
-        boolean sse = ssePaths.stream().anyMatch(p -> p.matches(request.getPath().pathWithinApplication()));
-        String token = request.getQueryParams().getFirst("token");
-        if (!sse || !StringUtils.hasText(token)) {
+        String token = ssePaths.tokenOf(request).orElse(null);
+        if (token == null) {
             return chain.filter(exchange);
         }
 

@@ -1,5 +1,6 @@
 package com.parkview.gateway.filter;
 
+import com.parkview.gateway.security.RoleHeader;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
@@ -35,11 +36,9 @@ public class AuthForwardFilter implements GlobalFilter, Ordered {
 
     private static ServerWebExchange withUserHeaders(ServerWebExchange exchange, JwtAuthenticationToken auth) {
         Jwt jwt = auth.getToken();
-        boolean admin = auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
-        boolean operator = auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_OPERATOR"));
         ServerHttpRequest mutated = exchange.getRequest().mutate()
                 .header("X-User-Id", jwt.getSubject())
-                .header("X-User-Role", admin ? "admin" : operator ? "operator" : "driver")
+                .header("X-User-Role", RoleHeader.of(auth.getAuthorities()))
                 .build();
         ServerWebExchange result = exchange.mutate().request(mutated).build();
         result.getAttributes().put(USER_ID_ATTRIBUTE, jwt.getSubject());
