@@ -34,9 +34,10 @@ Code layout (`com.parkview.gateway`):
 | `/api/v1/sessions/**` | session-service | |
 | `/api/v1/mapping/**`, `/api/v1/zones/**` | parking-mapping-service | spot writes: `spot:write`, zone writes: `zone:write`, map history (`zones/*/versions`, `zones/*/changes`, `spots/*/changes`): `mapping:view` |
 | `/api/v1/events/**` | event-streaming | SSE, no response timeout, `?token=` allowed on `/stream/**` only |
-| `/api/v1/cameras/**` | ingestion-service | rewritten to `/cameras/**`; `ingest` and `heartbeat` are public (camera api key), 12 MB bodies |
+| `/api/v1/cameras/**` | ingestion-service | rewritten to `/cameras/**` (the bare `/api/v1/cameras` list becomes `/cameras`); `ingest` and `heartbeat` are public (camera api key), `GET /cameras` any signed-in user (the service wants `camera:admin` or `stream:operator` + zone scope), `POST cameras/*/capture` `ai:use`, 12 MB bodies |
+| `/api/v1/detections/**` | ingestion-service | rewritten to `/detections/**` (bare path too), 64 KB bodies, 10 req/s per IP; `GET` `violation:read`, `PATCH detections/*/review` `violation:resolve` |
 | `/api/v1/files/**` | file-service | 22 MB bodies; uploads `file:upload`, `GET snapshots/**` `file:view`, `GET evidence/*/url` any signed-in user (owners need it, the service wants `file:view` of staff) |
-| `/api/v1/notifications/**`, `/api/v1/lookup/**`, `/api/v1/payments/**` | notification / lookup / payment | `payments/webhook` is public (Stripe signature) |
+| `/api/v1/notifications/**`, `/api/v1/lookup/**`, `/api/v1/payments/**` | notification / lookup / payment | `payments/webhook` is public (Stripe signature); everything under `notifications/**` (list, read, read-all, push-subscription, test-push) needs a valid token, the service scopes it to the token subject |
 | `/api/v1/ai/**` | ai-detection-service | rewritten to `/**`, needs `ai:use`, gateway adds `X-Internal-Api-Key` |
 
 GET requests to read-only services are retried twice on 502/503/504. Upstream calls time out after 15 s
@@ -60,9 +61,10 @@ The operator and admin functions are guarded by permissions, one per function (`
 `POST fines/*/void` and `POST fines/*/mark-paid` `fine:manage`, `GET fines/*/history` `violation:read`,
 `violations/zone/**` `violation:read`, `violations/*/resolve` `violation:resolve`, `events/status` and `events/stream/operator`
 `stream:operator`, mapping writes `spot:write`, zone writes `zone:write`, map history GETs `mapping:view`, evidence and snapshot uploads `file:upload`, snapshot GETs `file:view`,
+`POST cameras/*/capture` `ai:use` (listed after `cameras/admin/**`, so a camera id `admin` stays under `camera:admin`), `GET detections` and `GET detections/**` `violation:read`, `PATCH detections/*/review` `violation:resolve`,
 `/access/**` `access:read` for GET and `access:manage` for the rest). Deliberately **not** gated here, because one gateway permission cannot express them: `GET /files/evidence/*/url`
 (owner of the fine, or staff with `file:view`, decided by file-service), `POST /zones/check-overlap` (service accepts `mapping:view`, `zone:write` or `spot:write`, so it is a plain
-authenticated rule ahead of the zone-write rule), the other mapping GETs (drivers read zones and spots), the rest of `/fines/**` and `/users/**` (any valid token, the services check ownership).
+authenticated rule ahead of the zone-write rule), the other mapping GETs (drivers read zones and spots), the rest of `/fines/**` and `/users/**` incl. `/users/me/plates` (any valid token, the services check ownership), `GET /cameras` and `/notifications/**` (any valid token, the services decide).
 `permission` is only valid with `access: PERMISSION` and must be in the catalogue (`Permissions`, mirrors
 `smart-parking-e2e/contracts/permissions.json`): a misspelt or unknown name **fails the startup** instead of guarding nothing.
 
