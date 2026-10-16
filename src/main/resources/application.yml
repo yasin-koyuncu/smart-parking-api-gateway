@@ -128,9 +128,25 @@ spring:
               predicates:
                 - Path=/api/v1/cameras/**
               filters:
-                - RewritePath=/api/v1/cameras/(?<segment>.*), /cameras/${segment}
+                # Path=/api/v1/cameras/** also matches the bare /api/v1/cameras (the camera list), so the rewrite keeps the optional
+                # slash inside the captured group: /api/v1/cameras -> /cameras, /api/v1/cameras/x/capture -> /cameras/x/capture
+                - RewritePath=/api/v1/cameras(?<segment>.*), /cameras${segment}
                 - name: RequestSize
                   args: { maxSize: 12MB }       # base64 snapshot
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 10
+                    redis-rate-limiter.burstCapacity: 20
+
+            # ── Detections (AI detections awaiting review) are also owned by ingestion-service ──
+            - id: ingestion-detections
+              uri: ${INGESTION_SERVICE_URL:http://localhost:9000}
+              predicates:
+                - Path=/api/v1/detections/**
+              filters:
+                - RewritePath=/api/v1/detections(?<segment>.*), /detections${segment}    # bare /api/v1/detections -> /detections
+                - name: RequestSize
+                  args: { maxSize: 64KB }
                 - name: RequestRateLimiter
                   args:
                     redis-rate-limiter.replenishRate: 10
@@ -275,11 +291,20 @@ parkview:
       - { paths: ["/api/v1/fines/*/void", "/api/v1/fines/*/mark-paid"], methods: [POST], access: PERMISSION, permission: "fine:manage" }
       - { paths: ["/api/v1/fines/*/history"], methods: [GET], access: PERMISSION, permission: "violation:read" }
       - { paths: ["/api/v1/fines/**"], access: AUTHENTICATED }
-      - { paths: ["/api/v1/users/**"], access: AUTHENTICATED }
+      - { paths: ["/api/v1/users/**"], access: AUTHENTICATED }     # incl. GET/POST /users/me/plates and DELETE /users/me/plates/*
+      # notifications of the signed-in user (list, read, read-all, push-subscription, test-push): the service scopes everything to the token subject
+      - { paths: ["/api/v1/notifications/**"], access: AUTHENTICATED }
       # operator functions: one permission each (ADR 0002). Tokens without a permissions claim get the role's
       # defaults while parkview.security.legacy-role-fallback is true.
       - { paths: ["/api/v1/ai/**"], access: PERMISSION, permission: "ai:use" }
       - { paths: ["/api/v1/cameras/admin/**"], access: PERMISSION, permission: "camera:admin" }
+      # camera list: ingestion-service wants camera:admin OR stream:operator with zone scope, which one gateway permission cannot say: the service decides.
+      # Exact path only (the PUBLIC device rules above and the admin rule stay first; `*` is one segment, so none of these capture each other)
+      - { paths: ["/api/v1/cameras"], methods: [GET], access: AUTHENTICATED }
+      - { paths: ["/api/v1/cameras/*/capture"], methods: [POST], access: PERMISSION, permission: "ai:use" }
+      # AI detections awaiting review (ingestion-service): reads need violation:read, the review decision violation:resolve
+      - { paths: ["/api/v1/detections/*/review"], methods: [PATCH], access: PERMISSION, permission: "violation:resolve" }
+      - { paths: ["/api/v1/detections", "/api/v1/detections/**"], methods: [GET, HEAD], access: PERMISSION, permission: "violation:read" }
       - { paths: ["/api/v1/lookup/**"], access: PERMISSION, permission: "lookup:vehicle" }
       - { paths: ["/api/v1/permits/**"], access: PERMISSION, permission: "permit:manage" }
       - { paths: ["/api/v1/sessions/zone/**"], access: PERMISSION, permission: "session:read" }
