@@ -57,6 +57,10 @@ class AuthorizationMatrixTest {
                 new Guarded(HttpMethod.POST, "/api/v1/fines/f1/void", "fine:manage"),
                 new Guarded(HttpMethod.POST, "/api/v1/fines/f1/mark-paid", "fine:manage"),
                 new Guarded(HttpMethod.GET, "/api/v1/fines/f1/history", "violation:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/fines/f1/evidence", "violation:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/disputes", "fine:manage"),
+                new Guarded(HttpMethod.GET, "/api/v1/disputes/d1", "fine:manage"),
+                new Guarded(HttpMethod.POST, "/api/v1/disputes/d1/decision", "fine:manage"),
                 new Guarded(HttpMethod.PATCH, "/api/v1/violations/7/resolve", "violation:resolve"),
                 new Guarded(HttpMethod.GET, "/api/v1/events/status", "stream:operator"),
                 new Guarded(HttpMethod.GET, "/api/v1/events/stream/operator", "stream:operator"),
@@ -209,8 +213,11 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.PATCH, "/api/v1/sessions/7", operator)).isEqualTo(403);
         assertThat(status(HttpMethod.POST, "/api/v1/fines/f1/void", operator)).isEqualTo(403);
         assertThat(status(HttpMethod.POST, "/api/v1/fines/f1/mark-paid", operator)).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/disputes", operator)).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/disputes/d1/decision", operator)).isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/search", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/history", operator)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/evidence", operator)).isEqualTo(200);
         // not in the operator defaults: zone writes (billing) and access management
         assertThat(status(HttpMethod.POST, "/api/v1/zones", operator)).isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/access/roles", operator)).isEqualTo(403);
@@ -219,6 +226,8 @@ class AuthorizationMatrixTest {
         Map<String, Object> admin = Map.of("role", "admin");
         assertThat(status(HttpMethod.POST, "/api/v1/sessions/7/void", admin)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/fines/f1/mark-paid", admin)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/disputes", admin)).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/disputes/d1/decision", admin)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/zones", admin)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/access/roles", admin)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/events/stream/operator", admin)).isEqualTo(200);
@@ -272,6 +281,42 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.POST, "/api/v1/zones/check-overlap", null)).isEqualTo(401);
         // the rest of the zone writes are unchanged
         assertThat(status(HttpMethod.POST, "/api/v1/zones", permissionsOnly(Set.of("mapping:view", "spot:write")))).isEqualTo(403);
+    }
+
+    // ── disputes: the driver side needs only a token, the review queue needs fine:manage ──
+
+    @Test
+    void theDriverSideOfADisputeNeedsOnlyAValidTokenAndTheServiceDecidesOnOwnership() {
+        Map<String, Object> driver = Map.of("role", "driver", "permissions", List.of(), "plates", List.of("ABC123"));
+        Map<String, Object> operator = Map.of("role", "operator", "permissions", List.of());
+        for (Object[] call : new Object[][]{
+                {HttpMethod.GET, "/api/v1/fines/f1/explanation"}, {HttpMethod.GET, "/api/v1/fines/f1/dispute"},
+                {HttpMethod.POST, "/api/v1/fines/f1/dispute"}, {HttpMethod.POST, "/api/v1/disputes/d1/withdraw"}}) {
+            HttpMethod method = (HttpMethod) call[0];
+            String path = (String) call[1];
+            assertThat(status(method, path, null)).as(method + " " + path + " anonymous").isEqualTo(401);
+            assertThat(status(method, path, driver)).as(method + " " + path + " driver").isEqualTo(200);
+            assertThat(status(method, path, operator)).as(method + " " + path + " operator").isEqualTo(200);
+        }
+    }
+
+    @Test
+    void theReviewQueueAndTheDecisionAreClosedToDriversEvenWithTheirOwnRoutesOpen() {
+        Map<String, Object> driver = Map.of("role", "driver", "plates", List.of("ABC123"));
+        assertThat(status(HttpMethod.GET, "/api/v1/disputes", driver)).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/disputes?status=all", driver)).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/disputes/d1/decision", driver)).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/evidence", driver)).isEqualTo(403);
+        // fine:manage opens the queue but not the evidence (violation:read), and the other way round
+        Map<String, Object> manager = permissionsOnly(Set.of("fine:manage"));
+        assertThat(status(HttpMethod.GET, "/api/v1/disputes", manager)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/evidence", manager)).isEqualTo(403);
+        Map<String, Object> reader = permissionsOnly(Set.of("violation:read"));
+        assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/evidence", reader)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/disputes", reader)).isEqualTo(403);
+        // the finer rules apply to the listed methods only: the evidence is GET, withdraw is POST
+        assertThat(status(HttpMethod.POST, "/api/v1/fines/f1/evidence", driver)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/disputes/d1/withdraw", driver)).isEqualTo(403);
     }
 
     // ── fines and profile: any signed-in user, the services decide ──────────────

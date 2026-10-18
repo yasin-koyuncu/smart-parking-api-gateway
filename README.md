@@ -30,7 +30,7 @@ Code layout (`com.parkview.gateway`):
 | `/api/v1/auth/**` | authentication-service | `login`, `register`, `reset-password`: 1 req/s per IP (burst 5), 16 KB bodies |
 | `/api/v1/access/**` | authentication-service | roles, grants and audit log (ADR 0002); `access:read` / `access:manage`, `GET /access/me/**` for any signed-in user |
 | `/api/v1/users/**` | authentication-service | profile of the signed-in user (any role, the service uses the token subject) |
-| `/api/v1/violations/**`, `/api/v1/permits/**`, `/api/v1/fines/**` | rule-service | fines: any signed-in user, the service decides on ownership and zones |
+| `/api/v1/violations/**`, `/api/v1/permits/**`, `/api/v1/fines/**`, `/api/v1/disputes/**` | rule-service | fines: any signed-in user, the service decides on ownership and zones; `GET fines/*/evidence` `violation:read`; disputes: `POST fines/*/dispute`, `GET fines/*/dispute`, `GET fines/*/explanation` and `POST disputes/*/withdraw` any signed-in user (the service decides on ownership), the review queue and the decision (`GET /disputes`, `POST disputes/*/decision`) `fine:manage` |
 | `/api/v1/sessions/**` | session-service | |
 | `/api/v1/mapping/**`, `/api/v1/zones/**` | parking-mapping-service | spot writes: `spot:write`, zone writes: `zone:write`, map history (`zones/*/versions`, `zones/*/changes`, `spots/*/changes`): `mapping:view` |
 | `/api/v1/events/**` | event-streaming | SSE, no response timeout, `?token=` allowed on `/stream/**` only |
@@ -58,13 +58,14 @@ Declared in `application.yml` under `parkview.gateway.rules` (first match wins, 
 The operator and admin functions are guarded by permissions, one per function (`/ai/**` `ai:use`, `/cameras/admin/**` `camera:admin`,
 `/lookup/**` `lookup:vehicle`, `/permits/**` `permit:manage`, `sessions/zone/**` `session:read`, session start and pay `session:manage`,
 `GET sessions/search` and `GET sessions/*/history` `session:read`, `POST sessions/*/end`, `POST sessions/*/void` and `PATCH sessions/*` (one segment, so not `.../pay`) `session:correct`,
-`POST fines/*/void` and `POST fines/*/mark-paid` `fine:manage`, `GET fines/*/history` `violation:read`,
+`POST fines/*/void` and `POST fines/*/mark-paid` `fine:manage`, `GET fines/*/history` and `GET fines/*/evidence` (frozen evidence incl. camera snapshots) `violation:read`,
+`GET /disputes` and `/disputes/**` (review queue, decision) `fine:manage` (listed after `POST disputes/*/withdraw`, which any signed-in user may call: rule-service checks that the dispute is the caller's),
 `violations/zone/**` `violation:read`, `violations/*/resolve` `violation:resolve`, `events/status` and `events/stream/operator`
 `stream:operator`, mapping writes `spot:write`, zone writes `zone:write`, map history GETs `mapping:view`, evidence and snapshot uploads `file:upload`, snapshot GETs `file:view`,
 `POST cameras/*/capture` `ai:use` (listed after `cameras/admin/**`, so a camera id `admin` stays under `camera:admin`), `GET detections` and `GET detections/**` `violation:read`, `PATCH detections/*/review` `violation:resolve`,
 `/access/**` `access:read` for GET and `access:manage` for the rest). Deliberately **not** gated here, because one gateway permission cannot express them: `GET /files/evidence/*/url`
 (owner of the fine, or staff with `file:view`, decided by file-service), `POST /zones/check-overlap` (service accepts `mapping:view`, `zone:write` or `spot:write`, so it is a plain
-authenticated rule ahead of the zone-write rule), the other mapping GETs (drivers read zones and spots), the rest of `/fines/**` and `/users/**` incl. `/users/me/plates` (any valid token, the services check ownership), `GET /cameras` and `/notifications/**` (any valid token, the services decide).
+authenticated rule ahead of the zone-write rule), the other mapping GETs (drivers read zones and spots), the rest of `/fines/**` (incl. `GET fines/*/explanation` and `GET`/`POST fines/*/dispute`, which drivers use for their own fines; rule-service answers 404 for fines the caller may not see) and `/users/**` incl. `/users/me/plates` (any valid token, the services check ownership), `GET /cameras` and `/notifications/**` (any valid token, the services decide).
 `permission` is only valid with `access: PERMISSION` and must be in the catalogue (`Permissions`, mirrors
 `smart-parking-e2e/contracts/permissions.json`): a misspelt or unknown name **fails the startup** instead of guarding nothing.
 
@@ -98,6 +99,31 @@ Claims (written by the Supabase access-token hook, ADR 0002):
 | `*_SERVICE_URL` etc. | `http://localhost:<port>` | downstream base URLs: `AUTH_SERVICE_URL`, `RULE_ENGINE_URL`, `SESSION_SERVICE_URL`, `PARKING_MAPPING_URL`, `EVENT_STREAMING_URL`, `INGESTION_SERVICE_URL`, `FILE_SERVICE_URL`, `NOTIFICATION_SERVICE_URL`, `LOOKUP_SERVICE_URL`, `PAYMENT_SERVICE_URL`, `AI_SERVICE_URL` |
 | `LEGACY_ROLE_FALLBACK` | `true` | derive permissions from the role for tokens without `app_metadata.permissions` (`parkview.security.legacy-role-fallback`) |
 | `DOCS_ENABLED` | `false` | aggregated Swagger UI at `/swagger-ui.html` (each service must have `DOCS_ENABLED=true` too). Never in production |
+
+## Tracing
+
+Distributed tracing (OpenTelemetry through Micrometer Tracing, W3C `traceparent`) is **off by default**: while
+`TRACING_ENABLED` is unset there is no tracer, no exporter, no trace header and no connection attempt, and the
+service behaves exactly as before. It is switched on by environment variables alone:
+
+| Variable | Default | Description |
+|---|---|---|
+| `TRACING_ENABLED` | `false` | The single switch (`management.tracing.enabled`) |
+| `TRACING_SAMPLING` | `0.1` | Share of new traces recorded (`0` to `1`); a caller's sampled trace is always continued |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` | OTLP/HTTP collector, spans go to `<endpoint>/v1/traces`; `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` takes a full URL |
+| `OTEL_SERVICE_NAME` | `api-gateway` | Service name on the spans (default: `spring.application.name`) |
+| `TRACING_TRUST_INCOMING` | `false` | `true` keeps the `traceparent` a caller sent (only behind a trusted tracing proxy); by default the gateway drops it and starts every trace itself |
+
+Traced: every incoming request (a server span), and each proxied call to a downstream service (a client span whose
+`traceparent` the service continues). The caller's own `traceparent`/`tracestate`/`baggage` headers are dropped at this
+edge unless `TRACING_TRUST_INCOMING=true`, so nobody outside can join or force-sample the platform's traces. While tracing is on,
+Reactor context propagation is enabled (the same as `spring.reactor.context-propagation=auto`) so the trace reaches
+the filters and the log MDC.
+
+Not traced: `/actuator/**` (probes and scrapes are dropped before export). Spans never carry request or response
+bodies or tokens, and the raw URL (paths and queries hold plates and, on the stream, tokens) is removed before
+export: only the route template, method and status are recorded. `requestId` in the log pattern is unchanged; with
+tracing on Boot adds `[traceId-spanId]` to every log line.
 
 ## Run, test, build
 

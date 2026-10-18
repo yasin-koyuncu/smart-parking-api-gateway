@@ -402,6 +402,37 @@ class GatewayRoutingTest {
     }
 
     @Test
+    void disputesAndEvidenceAreRoutedToRuleServiceWithTheirOwnRules() throws Exception {
+        String driver = "Bearer " + validToken("driver", "d-1");
+        client.post().uri("/api/v1/fines/f1/dispute").header("Authorization", driver).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"message\":\"I disagree with this fine\"}").exchange().expectStatus().isOk();
+        RecordedRequest opened = upstreamRequest();
+        assertThat(opened.getPath()).isEqualTo("/api/v1/fines/f1/dispute");
+        assertThat(opened.getHeader("X-User-Id")).isEqualTo("d-1");
+        client.get().uri("/api/v1/fines/f1/explanation").header("Authorization", driver).exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/fines/f1/explanation");
+        client.post().uri("/api/v1/disputes/d1/withdraw").header("Authorization", driver).exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/disputes/d1/withdraw");
+
+        // the queue, the decision and the evidence are not for drivers: nothing reaches rule-service
+        client.get().uri("/api/v1/disputes?status=open").header("Authorization", driver).exchange().expectStatus().isForbidden();
+        client.post().uri("/api/v1/disputes/d1/decision").header("Authorization", driver).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{}").exchange().expectStatus().isForbidden();
+        client.get().uri("/api/v1/fines/f1/evidence").header("Authorization", driver).exchange().expectStatus().isForbidden();
+        client.get().uri("/api/v1/disputes").exchange().expectStatus().isUnauthorized();
+        assertThat(RECORDED.poll(300, TimeUnit.MILLISECONDS)).as("nothing reached upstream").isNull();
+
+        String manager = "Bearer " + permissionToken("op-7", "fine:manage", "violation:read");
+        client.get().uri("/api/v1/disputes?status=open&zoneId=z1").header("Authorization", manager).exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/disputes?status=open&zoneId=z1");
+        client.post().uri("/api/v1/disputes/d1/decision").header("Authorization", manager).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"outcome\":\"upheld\",\"note\":\"The evidence is clear\"}").exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/disputes/d1/decision");
+        client.get().uri("/api/v1/fines/f1/evidence").header("Authorization", manager).exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/fines/f1/evidence");
+    }
+
+    @Test
     void fileAndMapHistoryRulesNeedTheirPermissionButEvidenceUrlsStayOpenForOwners() throws Exception {
         String viewer = "Bearer " + permissionToken("op-2", "file:view", "mapping:view");
         client.get().uri("/api/v1/files/snapshots/url?key=cameras/c1/x.jpg").header("Authorization", viewer).exchange().expectStatus().isOk();

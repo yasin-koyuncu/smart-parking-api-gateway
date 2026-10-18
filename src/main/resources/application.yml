@@ -1,6 +1,10 @@
 spring:
   application:
     name: api-gateway
+  autoconfigure:
+    exclude:
+      # Tracing is part of the application only when TRACING_ENABLED=true: TracingConfig imports this back in then.
+      - org.springframework.boot.actuate.autoconfigure.tracing.OpenTelemetryTracingAutoConfiguration
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -71,7 +75,7 @@ spring:
             - id: rule-engine
               uri: ${RULE_ENGINE_URL:http://localhost:8081}
               predicates:
-                - Path=/api/v1/violations/**,/api/v1/permits/**,/api/v1/fines/**
+                - Path=/api/v1/violations/**,/api/v1/permits/**,/api/v1/fines/**,/api/v1/disputes/**
               filters:
                 - name: RequestSize
                   args: { maxSize: 1MB }
@@ -226,6 +230,17 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+  # Distributed tracing. Off unless TRACING_ENABLED=true: with it off there is no tracer, no exporter, no trace
+  # headers and no connection attempt (see TracingConfig). W3C traceparent over HTTP and AMQP; actuator spans are not exported.
+  tracing:
+    enabled: ${TRACING_ENABLED:false}
+    sampling:
+      probability: ${TRACING_SAMPLING:0.1}
+    propagation:
+      type: w3c
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces}
 
 springdoc:
   api-docs:
@@ -248,6 +263,9 @@ logging:
     level: "%5p [${spring.application.name:}]"
 
 parkview:
+  tracing:
+    # The public gateway starts its own traces; set TRACING_TRUST_INCOMING=true only behind a trusted tracing proxy.
+    trust-incoming-context: ${TRACING_TRUST_INCOMING:false}
   security:
     issuer: ${SUPABASE_URL}/auth/v1
     audience: ${SUPABASE_AUDIENCE:authenticated}
@@ -290,6 +308,14 @@ parkview:
       # staff corrections of fines (ADR 0002): first, so the catch-all below does not capture them
       - { paths: ["/api/v1/fines/*/void", "/api/v1/fines/*/mark-paid"], methods: [POST], access: PERMISSION, permission: "fine:manage" }
       - { paths: ["/api/v1/fines/*/history"], methods: [GET], access: PERMISSION, permission: "violation:read" }
+      # evidence (with the camera snapshots) is for staff; the explanation and the disputes of a fine are for the driver who owns the plate and for staff:
+      # any valid token, rule-service decides on ownership and zones (404 for what the caller may not see)
+      - { paths: ["/api/v1/fines/*/evidence"], methods: [GET], access: PERMISSION, permission: "violation:read" }
+      - { paths: ["/api/v1/fines/*/explanation"], methods: [GET], access: AUTHENTICATED }
+      - { paths: ["/api/v1/fines/*/dispute"], methods: [GET, POST], access: AUTHENTICATED }
+      - { paths: ["/api/v1/disputes/*/withdraw"], methods: [POST], access: AUTHENTICATED }
+      # the review queue and the decision of a dispute: fine:manage (rule-service also limits it to the zones of the token)
+      - { paths: ["/api/v1/disputes", "/api/v1/disputes/**"], access: PERMISSION, permission: "fine:manage" }
       - { paths: ["/api/v1/fines/**"], access: AUTHENTICATED }
       - { paths: ["/api/v1/users/**"], access: AUTHENTICATED }     # incl. GET/POST /users/me/plates and DELETE /users/me/plates/*
       # notifications of the signed-in user (list, read, read-all, push-subscription, test-push): the service scopes everything to the token subject
