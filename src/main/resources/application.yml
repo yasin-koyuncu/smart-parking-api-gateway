@@ -126,6 +126,26 @@ spring:
               metadata:
                 response-timeout: -1
 
+            # ── Calibration scan of a camera view -> ingestion-service. It moves a PTZ camera, takes a picture and has it analysed,
+            # which takes seconds, so this path alone gets a 60 s response timeout (the default is 15 s). Declared before
+            # ingestion-service: the first matching route wins. Not retried (it moves a camera), small bodies. The limiter is the
+            # same as for the other camera routes (the bucket is per user and shared by the routes; ingestion-service allows one scan per camera). ──
+            - id: ingestion-calibration-scan
+              uri: ${INGESTION_SERVICE_URL:http://localhost:9000}
+              predicates:
+                - Path=/api/v1/cameras/*/calibration/scan
+                - Method=POST
+              filters:
+                - RewritePath=/api/v1/cameras(?<segment>.*), /cameras${segment}
+                - name: RequestSize
+                  args: { maxSize: 64KB }
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 10
+                    redis-rate-limiter.burstCapacity: 20
+              metadata:
+                response-timeout: 60000     # milliseconds
+
             # ── Cameras (device api key in the body, no JWT) -> ingestion-service ──
             - id: ingestion-service
               uri: ${INGESTION_SERVICE_URL:http://localhost:9000}
@@ -328,6 +348,10 @@ parkview:
       # Exact path only (the PUBLIC device rules above and the admin rule stay first; `*` is one segment, so none of these capture each other)
       - { paths: ["/api/v1/cameras"], methods: [GET], access: AUTHENTICATED }
       - { paths: ["/api/v1/cameras/*/capture"], methods: [POST], access: PERMISSION, permission: "ai:use" }
+      # scanning a view needs camera:admin AND ai:use: a rule names one permission, so the edge asks for camera:admin and ingestion-service
+      # checks both. PTZ presets of a camera: camera:admin. (`*` is one segment; a camera id `admin` stays under the admin rule above.)
+      - { paths: ["/api/v1/cameras/*/calibration/scan"], methods: [POST], access: PERMISSION, permission: "camera:admin" }
+      - { paths: ["/api/v1/cameras/*/ptz/presets"], methods: [GET], access: PERMISSION, permission: "camera:admin" }
       # AI detections awaiting review (ingestion-service): reads need violation:read, the review decision violation:resolve
       - { paths: ["/api/v1/detections/*/review"], methods: [PATCH], access: PERMISSION, permission: "violation:resolve" }
       - { paths: ["/api/v1/detections", "/api/v1/detections/**"], methods: [GET, HEAD], access: PERMISSION, permission: "violation:read" }
@@ -347,6 +371,9 @@ parkview:
       # map history is for operators; every other mapping GET (zones, spots, geojson) is read by drivers and stays open. The overlap check
       # (POST /zones/check-overlap) accepts mapping:view, zone:write or spot:write: the service decides.
       - { paths: ["/api/v1/mapping/zones/*/versions", "/api/v1/mapping/zones/*/changes", "/api/v1/mapping/spots/*/changes"], methods: [GET, HEAD], access: PERMISSION, permission: "mapping:view" }
+      # parking areas and camera views (with their pictures and calibration) are for staff: reads need mapping:view, their writes fall under the
+      # spot:write rule for /mapping/** below
+      - { paths: ["/api/v1/mapping/areas", "/api/v1/mapping/areas/**", "/api/v1/mapping/views/**", "/api/v1/mapping/cameras/*/views"], methods: [GET, HEAD], access: PERMISSION, permission: "mapping:view" }
       # files: uploads and snapshot reads are permission-gated; GET /files/evidence/*/url is NOT, the owner of a fine (a driver) needs it
       # (the service wants file:view of staff and ownership of drivers)
       - { paths: ["/api/v1/files/evidence/*", "/api/v1/files/snapshots/*"], methods: [POST], access: PERMISSION, permission: "file:upload" }
