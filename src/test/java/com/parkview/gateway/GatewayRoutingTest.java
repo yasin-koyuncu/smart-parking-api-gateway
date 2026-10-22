@@ -24,6 +24,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.autoconfigure.web.reactive.AutoConfigureWebTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.cloud.gateway.route.Route;
+import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -72,6 +74,9 @@ class GatewayRoutingTest {
 
     @Autowired
     WebTestClient client;
+
+    @Autowired
+    RouteLocator routeLocator;
 
     private static ECKey generateKey() {
         try {
@@ -259,6 +264,68 @@ class GatewayRoutingTest {
         // the device rules are untouched by the new ones
         client.post().uri("/api/v1/cameras/heartbeat").contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isOk();
         assertThat(upstreamRequest().getPath()).isEqualTo("/cameras/heartbeat");
+    }
+
+    @Test
+    void calibrationScanAndPtzPresetsAreRewrittenForIngestionAndNeedCameraAdmin() throws Exception {
+        String admin = "Bearer " + permissionToken("ca-1", "camera:admin", "ai:use");
+        client.post().uri("/api/v1/cameras/c1/calibration/scan").header("Authorization", admin)
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"viewId\":\"7d9f0c1e-0000-4000-8000-000000000001\"}").exchange().expectStatus().isOk();
+        RecordedRequest scan = upstreamRequest();
+        assertThat(scan.getPath()).isEqualTo("/cameras/c1/calibration/scan");
+        assertThat(scan.getMethod()).isEqualTo("POST");
+        assertThat(scan.getHeader("X-User-Id")).isEqualTo("ca-1");
+
+        client.get().uri("/api/v1/cameras/c1/ptz/presets").header("Authorization", "Bearer " + permissionToken("ca-2", "camera:admin"))
+                .exchange().expectStatus().isOk();
+        RecordedRequest presets = upstreamRequest();
+        assertThat(presets.getPath()).isEqualTo("/cameras/c1/ptz/presets");
+        assertThat(presets.getHeader("X-User-Id")).isEqualTo("ca-2");
+
+        String aiOnly = "Bearer " + permissionToken("op-9", "ai:use");
+        client.post().uri("/api/v1/cameras/c1/calibration/scan").header("Authorization", aiOnly)
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
+        client.get().uri("/api/v1/cameras/c1/ptz/presets").header("Authorization", aiOnly).exchange().expectStatus().isForbidden();
+        as("driver", "d-1").post().uri("/api/v1/cameras/c1/calibration/scan").contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
+        client.post().uri("/api/v1/cameras/c1/calibration/scan").contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isUnauthorized();
+        assertThat(RECORDED.poll(300, TimeUnit.MILLISECONDS)).as("refused calls never reach ingestion").isNull();
+    }
+
+    @Test
+    void onlyTheCalibrationScanRouteHasTheLongerResponseTimeout() {
+        List<Route> routes = routeLocator.getRoutes().collectList().block();
+        assertThat(routes).isNotNull();
+        List<String> ids = routes.stream().map(Route::getId).toList();
+        Route scan = routes.get(ids.indexOf("ingestion-calibration-scan"));
+        Route ingestion = routes.get(ids.indexOf("ingestion-service"));
+
+        // 60 s for the scan (it moves a camera, takes a picture and has it analysed), the default 15 s for everything else
+        assertThat(String.valueOf(scan.getMetadata().get("response-timeout"))).isEqualTo("60000");
+        assertThat(ingestion.getMetadata()).doesNotContainKey("response-timeout");
+        assertThat(scan.getUri()).isEqualTo(ingestion.getUri());
+        // first match wins, so the scan route has to come first
+        assertThat(ids.indexOf("ingestion-calibration-scan")).isLessThan(ids.indexOf("ingestion-service"));
+        // the SSE stream keeps its own (disabled) timeout; nobody else got one
+        assertThat(routes.stream().filter(r -> r.getMetadata().containsKey("response-timeout")).map(Route::getId))
+                .containsExactlyInAnyOrder("event-streaming", "ingestion-calibration-scan");
+    }
+
+    @Test
+    void parkingAreasAndCameraViewsAreRoutedToMappingAndReadWithMappingView() throws Exception {
+        String viewer = "Bearer " + permissionToken("mv-1", "mapping:view");
+        for (String path : List.of("/api/v1/mapping/areas", "/api/v1/mapping/areas/a1", "/api/v1/mapping/views/v1", "/api/v1/mapping/cameras/c1/views")) {
+            client.get().uri(path).header("Authorization", viewer).exchange().expectStatus().isOk();
+            assertThat(upstreamRequest().getPath()).isEqualTo(path);   // not rewritten: mapping-service serves /api/v1/mapping/**
+        }
+        String editor = "Bearer " + permissionToken("sw-1", "spot:write");
+        client.put().uri("/api/v1/mapping/views/v1/georeference").header("Authorization", editor)
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isOk();
+        assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/mapping/views/v1/georeference");
+        client.put().uri("/api/v1/mapping/views/v1/georeference").header("Authorization", viewer)
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
+        client.get().uri("/api/v1/mapping/views/v1").header("Authorization", editor).exchange().expectStatus().isForbidden();
+        as("driver", "d-1").get().uri("/api/v1/mapping/areas/a1").exchange().expectStatus().isForbidden();
+        assertThat(RECORDED.poll(300, TimeUnit.MILLISECONDS)).as("refused calls never reach mapping-service").isNull();
     }
 
     @Test

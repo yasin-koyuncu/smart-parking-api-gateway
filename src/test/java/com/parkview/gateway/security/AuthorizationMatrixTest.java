@@ -39,6 +39,8 @@ class AuthorizationMatrixTest {
                 new Guarded(HttpMethod.POST, "/api/v1/ai/anpr/read", "ai:use"),
                 new Guarded(HttpMethod.GET, "/api/v1/cameras/admin/snapshot-url", "camera:admin"),
                 new Guarded(HttpMethod.POST, "/api/v1/cameras/c1/capture", "ai:use"),
+                new Guarded(HttpMethod.POST, "/api/v1/cameras/c1/calibration/scan", "camera:admin"),
+                new Guarded(HttpMethod.GET, "/api/v1/cameras/c1/ptz/presets", "camera:admin"),
                 new Guarded(HttpMethod.GET, "/api/v1/detections", "violation:read"),
                 new Guarded(HttpMethod.GET, "/api/v1/detections/d1", "violation:read"),
                 new Guarded(HttpMethod.PATCH, "/api/v1/detections/d1/review", "violation:resolve"),
@@ -71,6 +73,21 @@ class AuthorizationMatrixTest {
                 new Guarded(HttpMethod.POST, "/api/v1/files/evidence/f1", "file:upload"),
                 new Guarded(HttpMethod.POST, "/api/v1/files/snapshots/c1", "file:upload"),
                 new Guarded(HttpMethod.GET, "/api/v1/files/snapshots/url", "file:view"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/areas", "mapping:view"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/areas/a1", "mapping:view"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/areas/a1", "mapping:view"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/views/v1", "mapping:view"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/views/v1", "mapping:view"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/cameras/c1/views", "mapping:view"),
+                new Guarded(HttpMethod.POST, "/api/v1/mapping/areas", "spot:write"),
+                new Guarded(HttpMethod.PUT, "/api/v1/mapping/areas/a1", "spot:write"),
+                new Guarded(HttpMethod.DELETE, "/api/v1/mapping/areas/a1", "spot:write"),
+                new Guarded(HttpMethod.POST, "/api/v1/mapping/cameras/c1/views", "spot:write"),
+                new Guarded(HttpMethod.PUT, "/api/v1/mapping/views/v1", "spot:write"),
+                new Guarded(HttpMethod.DELETE, "/api/v1/mapping/views/v1", "spot:write"),
+                new Guarded(HttpMethod.POST, "/api/v1/mapping/views/v1/import/calibration", "spot:write"),
+                new Guarded(HttpMethod.PUT, "/api/v1/mapping/views/v1/georeference", "spot:write"),
+                new Guarded(HttpMethod.DELETE, "/api/v1/mapping/views/v1/georeference", "spot:write"),
                 new Guarded(HttpMethod.POST, "/api/v1/mapping/spots", "spot:write"),
                 new Guarded(HttpMethod.PUT, "/api/v1/mapping/spots/1", "spot:write"),
                 new Guarded(HttpMethod.DELETE, "/api/v1/mapping/spots/1", "spot:write"),
@@ -352,6 +369,49 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/capture", null)).isEqualTo(401);
         assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/capture", driver)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/x/capture", driver)).isEqualTo(200);
+    }
+
+    @Test
+    void calibrationScanAndPtzPresetsAreForCameraAdminsAndTheServiceAlsoWantsAiUseForTheScan() {
+        // the rule format names one permission: the edge asks for camera:admin, ingestion-service checks camera:admin AND ai:use
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/calibration/scan", permissionsOnly(Set.of("camera:admin")))).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/calibration/scan", permissionsOnly(Set.of("ai:use")))).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/calibration/scan", permissionsOnly(Set.of("camera:admin", "ai:use")))).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/ptz/presets", permissionsOnly(Set.of("camera:admin")))).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/ptz/presets", permissionsOnly(Set.of("ai:use", "stream:operator")))).isEqualTo(403);
+        // the default operator holds both, a driver neither, and nobody gets in without a token
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/calibration/scan", Map.of("role", "operator"))).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/ptz/presets", Map.of("role", "operator"))).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/calibration/scan", Map.of("role", "driver"))).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/ptz/presets", Map.of("role", "driver"))).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/calibration/scan", null)).isEqualTo(401);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/ptz/presets", null)).isEqualTo(401);
+        // `*` is one segment, and a camera id `admin` stays under the admin rule
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/admin/calibration/scan", permissionsOnly(Set.of("ai:use")))).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/x/calibration/scan", Map.of("role", "driver", "permissions", List.of()))).isEqualTo(200);
+        // the capture rule is untouched
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/capture", permissionsOnly(Set.of("camera:admin")))).isEqualTo(403);
+    }
+
+    @Test
+    void parkingAreasAndCameraViewsAreReadWithMappingViewAndWrittenWithSpotWrite() {
+        Map<String, Object> viewer = permissionsOnly(Set.of("mapping:view"));
+        Map<String, Object> editor = permissionsOnly(Set.of("spot:write"));
+        Map<String, Object> driver = Map.of("role", "driver", "permissions", List.of());
+        for (String path : List.of("/api/v1/mapping/areas", "/api/v1/mapping/areas/a1", "/api/v1/mapping/views/v1", "/api/v1/mapping/cameras/c1/views")) {
+            assertThat(status(HttpMethod.GET, path, viewer)).as(path + " viewer").isEqualTo(200);
+            assertThat(status(HttpMethod.GET, path, editor)).as(path + " editor (the service wants mapping:view to read)").isEqualTo(403);
+            assertThat(status(HttpMethod.GET, path, driver)).as(path + " driver").isEqualTo(403);
+            assertThat(status(HttpMethod.GET, path, Map.of("role", "operator"))).as(path + " operator with the defaults").isEqualTo(200);
+            assertThat(status(HttpMethod.GET, path, null)).as(path + " anonymous").isEqualTo(401);
+        }
+        for (String path : List.of("/api/v1/mapping/areas", "/api/v1/mapping/cameras/c1/views", "/api/v1/mapping/views/v1/import/calibration")) {
+            assertThat(status(HttpMethod.POST, path, editor)).as(path + " editor").isEqualTo(200);
+            assertThat(status(HttpMethod.POST, path, viewer)).as(path + " viewer").isEqualTo(403);
+            assertThat(status(HttpMethod.POST, path, driver)).as(path + " driver").isEqualTo(403);
+        }
+        // what drivers read on the map stays open
+        assertThat(status(HttpMethod.GET, "/api/v1/mapping/zones/z1/spots", driver)).isEqualTo(200);
     }
 
     @Test
