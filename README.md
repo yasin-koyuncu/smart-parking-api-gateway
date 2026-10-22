@@ -32,16 +32,19 @@ Code layout (`com.parkview.gateway`):
 | `/api/v1/users/**` | authentication-service | profile of the signed-in user (any role, the service uses the token subject) |
 | `/api/v1/violations/**`, `/api/v1/permits/**`, `/api/v1/fines/**`, `/api/v1/disputes/**` | rule-service | fines: any signed-in user, the service decides on ownership and zones; `GET fines/*/evidence` `violation:read`; disputes: `POST fines/*/dispute`, `GET fines/*/dispute`, `GET fines/*/explanation` and `POST disputes/*/withdraw` any signed-in user (the service decides on ownership), the review queue and the decision (`GET /disputes`, `POST disputes/*/decision`) `fine:manage` |
 | `/api/v1/sessions/**` | session-service | |
-| `/api/v1/mapping/**`, `/api/v1/zones/**` | parking-mapping-service | spot writes: `spot:write`, zone writes: `zone:write`, map history (`zones/*/versions`, `zones/*/changes`, `spots/*/changes`): `mapping:view` |
+| `/api/v1/mapping/**`, `/api/v1/zones/**` | parking-mapping-service | spot writes: `spot:write`, zone writes: `zone:write`, map history (`zones/*/versions`, `zones/*/changes`, `spots/*/changes`): `mapping:view`; parking areas and camera views (`GET mapping/areas/**`, `GET mapping/views/**`, `GET mapping/cameras/*/views`): `mapping:view`, their writes (every non-GET method under `mapping/**`) `spot:write` |
 | `/api/v1/events/**` | event-streaming | SSE, no response timeout, `?token=` allowed on `/stream/**` only |
-| `/api/v1/cameras/**` | ingestion-service | rewritten to `/cameras/**` (the bare `/api/v1/cameras` list becomes `/cameras`); `ingest` and `heartbeat` are public (camera api key), `GET /cameras` any signed-in user (the service wants `camera:admin` or `stream:operator` + zone scope), `POST cameras/*/capture` `ai:use`, 12 MB bodies |
+| `/api/v1/cameras/**` | ingestion-service | rewritten to `/cameras/**` (the bare `/api/v1/cameras` list becomes `/cameras`); `ingest` and `heartbeat` are public (camera api key), `GET /cameras` any signed-in user (the service wants `camera:admin` or `stream:operator` + zone scope), `POST cameras/*/capture` `ai:use`, `POST cameras/*/calibration/scan` `camera:admin` at the edge (the service wants `camera:admin` **and** `ai:use`) with its own route, `GET cameras/*/ptz/presets` `camera:admin`, 12 MB bodies (64 KB on the scan) |
 | `/api/v1/detections/**` | ingestion-service | rewritten to `/detections/**` (bare path too), 64 KB bodies, 10 req/s per IP; `GET` `violation:read`, `PATCH detections/*/review` `violation:resolve` |
 | `/api/v1/files/**` | file-service | 22 MB bodies; uploads `file:upload`, `GET snapshots/**` `file:view`, `GET evidence/*/url` any signed-in user (owners need it, the service wants `file:view` of staff) |
 | `/api/v1/notifications/**`, `/api/v1/lookup/**`, `/api/v1/payments/**` | notification / lookup / payment | `payments/webhook` is public (Stripe signature); everything under `notifications/**` (list, read, read-all, push-subscription, test-push) needs a valid token, the service scopes it to the token subject |
 | `/api/v1/ai/**` | ai-detection-service | rewritten to `/**`, needs `ai:use`, gateway adds `X-Internal-Api-Key` |
 
 GET requests to read-only services are retried twice on 502/503/504. Upstream calls time out after 15 s
-(connect 2 s). Failures are returned as `application/problem+json` without internal details.
+(connect 2 s), except the stream of `/api/v1/events/**` (no timeout) and `POST /api/v1/cameras/*/calibration/scan`, which has
+its own route (`ingestion-calibration-scan`, declared before `ingestion-service`, never retried) with a response timeout of
+60 s: the scan moves a PTZ camera, takes a picture and has it analysed, which takes seconds. The longer timeout is route
+metadata (`response-timeout`, in milliseconds), so it applies to that path only. Failures are returned as `application/problem+json` without internal details.
 
 ## Authorisation rules
 
@@ -62,7 +65,7 @@ The operator and admin functions are guarded by permissions, one per function (`
 `GET /disputes` and `/disputes/**` (review queue, decision) `fine:manage` (listed after `POST disputes/*/withdraw`, which any signed-in user may call: rule-service checks that the dispute is the caller's),
 `violations/zone/**` `violation:read`, `violations/*/resolve` `violation:resolve`, `events/status` and `events/stream/operator`
 `stream:operator`, mapping writes `spot:write`, zone writes `zone:write`, map history GETs `mapping:view`, evidence and snapshot uploads `file:upload`, snapshot GETs `file:view`,
-`POST cameras/*/capture` `ai:use` (listed after `cameras/admin/**`, so a camera id `admin` stays under `camera:admin`), `GET detections` and `GET detections/**` `violation:read`, `PATCH detections/*/review` `violation:resolve`,
+`POST cameras/*/capture` `ai:use` (listed after `cameras/admin/**`, so a camera id `admin` stays under `camera:admin`), `POST cameras/*/calibration/scan` and `GET cameras/*/ptz/presets` `camera:admin` (a rule names one permission, so the scan, which ingestion-service restricts to `camera:admin` **and** `ai:use`, is checked for `camera:admin` here and for both there), `GET mapping/areas/**`, `GET mapping/views/**` and `GET mapping/cameras/*/views` `mapping:view` (staff read parking areas and camera views with their pictures; drivers do not; the writes are the `spot:write` rule for `mapping/**`), `GET detections` and `GET detections/**` `violation:read`, `PATCH detections/*/review` `violation:resolve`,
 `/access/**` `access:read` for GET and `access:manage` for the rest). Deliberately **not** gated here, because one gateway permission cannot express them: `GET /files/evidence/*/url`
 (owner of the fine, or staff with `file:view`, decided by file-service), `POST /zones/check-overlap` (service accepts `mapping:view`, `zone:write` or `spot:write`, so it is a plain
 authenticated rule ahead of the zone-write rule), the other mapping GETs (drivers read zones and spots), the rest of `/fines/**` (incl. `GET fines/*/explanation` and `GET`/`POST fines/*/dispute`, which drivers use for their own fines; rule-service answers 404 for fines the caller may not see) and `/users/**` incl. `/users/me/plates` (any valid token, the services check ownership), `GET /cameras` and `/notifications/**` (any valid token, the services decide).
