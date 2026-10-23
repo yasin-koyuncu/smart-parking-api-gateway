@@ -13,21 +13,23 @@ import java.util.Set;
  */
 public final class Permissions {
 
+    // BEGIN GENERATED permissions (contracts/permissions.json in smart-parking-e2e; do not edit)
     private static final Set<String> OPERATOR = Set.of(
             "mapping:view", "spot:write", "session:read", "session:manage", "violation:read", "violation:resolve",
             "permit:manage", "lookup:vehicle", "file:upload", "file:view", "stream:operator", "camera:admin", "ai:use");
 
     /** Every permission the gateway knows; a rule naming anything else fails the startup. */
     public static final Set<String> ALL = Set.of(
-            "mapping:view", "zone:write", "spot:write", "session:read", "session:manage", "violation:read", "violation:resolve",
-            "permit:manage", "lookup:vehicle", "file:upload", "file:view", "stream:operator", "camera:admin", "ai:use",
-            "session:correct", "fine:manage", "access:read", "access:manage");
+            "mapping:view", "zone:write", "spot:write", "session:read", "session:manage", "session:correct",
+            "violation:read", "violation:resolve", "fine:manage", "permit:manage", "lookup:vehicle", "file:upload",
+            "file:view", "stream:operator", "camera:admin", "ai:use", "access:read", "access:manage");
 
     /** Keyed by lower-case role name (admin | operator | driver). */
     public static final Map<String, Set<String>> DEFAULTS_BY_ROLE = Map.of(
             "admin", ALL,
             "operator", OPERATOR,
             "driver", Set.of());
+    // END GENERATED permissions
 
     private Permissions() {
     }
