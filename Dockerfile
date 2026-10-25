@@ -13,5 +13,5 @@ COPY --from=build /app.jar /app.jar
 USER app
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=40s --retries=5 \
-  CMD curl -fsS http://localhost:8080/actuator/health/readiness || exit 1
+  CMD wget -q -O /dev/null http://localhost:8080/actuator/health/readiness || exit 1
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=60", "-jar", "/app.jar"]

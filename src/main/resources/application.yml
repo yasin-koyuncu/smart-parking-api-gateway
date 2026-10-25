@@ -195,6 +195,11 @@ spring:
               filters:
                 - name: RequestSize
                   args: { maxSize: 64KB }
+                # POST /notifications/test-push sends a push on every call
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 10
+                    redis-rate-limiter.burstCapacity: 20
 
             - id: lookup-service
               uri: ${LOOKUP_SERVICE_URL:http://localhost:8089}
@@ -208,6 +213,15 @@ spring:
                     redis-rate-limiter.replenishRate: 10
                     redis-rate-limiter.burstCapacity: 20
 
+            # the Stripe webhook is signature-authenticated and comes from a few addresses in bursts: no rate limit, before the route below
+            - id: payment-webhook
+              uri: ${PAYMENT_SERVICE_URL:http://localhost:8088}
+              predicates:
+                - Path=/api/v1/payments/webhook
+              filters:
+                - name: RequestSize
+                  args: { maxSize: 256KB }
+
             - id: payment-service
               uri: ${PAYMENT_SERVICE_URL:http://localhost:8088}
               predicates:
@@ -215,6 +229,11 @@ spring:
               filters:
                 - name: RequestSize
                   args: { maxSize: 256KB }
+                # a checkout makes calls to Stripe and to two services: a driver needs a few per minute, not a stream
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 5
+                    redis-rate-limiter.burstCapacity: 10
 
             # AI service is internal: operators reach it through the gateway, which adds the service key.
             - id: ai-service
@@ -363,6 +382,8 @@ parkview:
       # session search and history are reads (a single segment under /sessions would otherwise be an id); corrections need their own permission.
       # PATCH /sessions/* is one path segment, so it never captures PATCH /sessions/*/pay above.
       - { paths: ["/api/v1/sessions/search", "/api/v1/sessions/*/history"], methods: [GET], access: PERMISSION, permission: "session:read" }
+      # the events of one session (ADR 0008 and the session README): the owner of the plate or staff with session:read in the zone, decided by the service
+      - { paths: ["/api/v1/sessions/*/events"], methods: [GET], access: AUTHENTICATED }
       - { paths: ["/api/v1/sessions/*/end", "/api/v1/sessions/*/void"], methods: [POST], access: PERMISSION, permission: "session:correct" }
       - { paths: ["/api/v1/sessions/*"], methods: [PATCH], access: PERMISSION, permission: "session:correct" }
       - { paths: ["/api/v1/violations/zone/**"], access: PERMISSION, permission: "violation:read" }
