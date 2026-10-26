@@ -48,6 +48,7 @@ class AuthorizationMatrixTest {
                 new Guarded(HttpMethod.POST, "/api/v1/permits", "permit:manage"),
                 new Guarded(HttpMethod.DELETE, "/api/v1/permits/1", "permit:manage"),
                 new Guarded(HttpMethod.GET, "/api/v1/sessions/zone/z1", "session:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/sessions/site/s1", "session:read"),
                 new Guarded(HttpMethod.POST, "/api/v1/sessions/start", "session:manage"),
                 new Guarded(HttpMethod.PATCH, "/api/v1/sessions/7/pay", "session:manage"),
                 new Guarded(HttpMethod.GET, "/api/v1/sessions/search", "session:read"),
@@ -56,6 +57,7 @@ class AuthorizationMatrixTest {
                 new Guarded(HttpMethod.POST, "/api/v1/sessions/7/void", "session:correct"),
                 new Guarded(HttpMethod.PATCH, "/api/v1/sessions/7", "session:correct"),
                 new Guarded(HttpMethod.GET, "/api/v1/violations/zone/z1", "violation:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/violations/site/s1", "violation:read"),
                 new Guarded(HttpMethod.POST, "/api/v1/fines/f1/void", "fine:manage"),
                 new Guarded(HttpMethod.POST, "/api/v1/fines/f1/mark-paid", "fine:manage"),
                 new Guarded(HttpMethod.GET, "/api/v1/fines/f1/history", "violation:read"),
@@ -69,6 +71,13 @@ class AuthorizationMatrixTest {
                 new Guarded(HttpMethod.GET, "/api/v1/mapping/zones/z1/versions", "mapping:view"),
                 new Guarded(HttpMethod.HEAD, "/api/v1/mapping/zones/z1/versions", "mapping:view"),
                 new Guarded(HttpMethod.GET, "/api/v1/mapping/zones/z1/changes", "mapping:view"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/sites/s1/versions", "mapping:view"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/sites/s1/versions", "mapping:view"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/sites/s1/changes", "mapping:view"),
+                new Guarded(HttpMethod.GET, "/api/v1/sites/s1/versions", "mapping:view"),
+                new Guarded(HttpMethod.GET, "/api/v1/sites/s1/changes", "mapping:view"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/sites/s1/areas", "mapping:view"),
+                new Guarded(HttpMethod.GET, "/api/v1/sites/s1/areas", "mapping:view"),
                 new Guarded(HttpMethod.GET, "/api/v1/mapping/spots/s1/changes", "mapping:view"),
                 new Guarded(HttpMethod.POST, "/api/v1/files/evidence/f1", "file:upload"),
                 new Guarded(HttpMethod.POST, "/api/v1/files/snapshots/c1", "file:upload"),
@@ -91,15 +100,38 @@ class AuthorizationMatrixTest {
                 new Guarded(HttpMethod.POST, "/api/v1/mapping/spots", "spot:write"),
                 new Guarded(HttpMethod.PUT, "/api/v1/mapping/spots/1", "spot:write"),
                 new Guarded(HttpMethod.DELETE, "/api/v1/mapping/spots/1", "spot:write"),
+                // the site twins of the zone map edits (ADR 0009): spot:write like /mapping/zones/{zoneId}/...
+                new Guarded(HttpMethod.POST, "/api/v1/mapping/zones/z1/spots", "spot:write"),
+                new Guarded(HttpMethod.POST, "/api/v1/mapping/sites/s1/spots", "spot:write"),
+                new Guarded(HttpMethod.POST, "/api/v1/mapping/zones/z1/areas", "spot:write"),
+                new Guarded(HttpMethod.POST, "/api/v1/mapping/sites/s1/areas", "spot:write"),
+                new Guarded(HttpMethod.POST, "/api/v1/mapping/zones/z1/rollback", "spot:write"),
+                new Guarded(HttpMethod.POST, "/api/v1/mapping/sites/s1/rollback", "spot:write"),
+                new Guarded(HttpMethod.POST, "/api/v1/sites/s1/spots", "spot:write"),
+                new Guarded(HttpMethod.POST, "/api/v1/sites/s1/areas", "spot:write"),
+                new Guarded(HttpMethod.POST, "/api/v1/sites/s1/rollback", "spot:write"),
+                new Guarded(HttpMethod.POST, "/api/v1/sites/s1/import/calibration", "spot:write"),
                 new Guarded(HttpMethod.POST, "/api/v1/zones", "zone:write"),
                 new Guarded(HttpMethod.PATCH, "/api/v1/zones/z1", "zone:write"),
                 new Guarded(HttpMethod.DELETE, "/api/v1/zones/z1", "zone:write"),
+                // zone rules and their site twins (site rules, ADR 0009)
+                new Guarded(HttpMethod.POST, "/api/v1/zones/z1/rules", "zone:write"),
+                new Guarded(HttpMethod.DELETE, "/api/v1/zones/z1/rules/r1", "zone:write"),
+                new Guarded(HttpMethod.POST, "/api/v1/mapping/sites/s1/rules", "zone:write"),
+                new Guarded(HttpMethod.PUT, "/api/v1/mapping/sites/s1/rules/r1", "zone:write"),
+                new Guarded(HttpMethod.DELETE, "/api/v1/mapping/sites/s1/rules/r1", "zone:write"),
+                new Guarded(HttpMethod.POST, "/api/v1/sites/s1/rules", "zone:write"),
+                new Guarded(HttpMethod.PUT, "/api/v1/sites/s1/rules/r1", "zone:write"),
+                new Guarded(HttpMethod.POST, "/api/v1/sites", "zone:write"),
+                new Guarded(HttpMethod.PUT, "/api/v1/sites/s1", "zone:write"),
+                new Guarded(HttpMethod.DELETE, "/api/v1/sites/s1", "zone:write"),
                 new Guarded(HttpMethod.GET, "/api/v1/access/roles", "access:read"),
                 new Guarded(HttpMethod.GET, "/api/v1/access/users/u1/audit", "access:read"),
                 new Guarded(HttpMethod.HEAD, "/api/v1/access/roles", "access:read"),
                 new Guarded(HttpMethod.POST, "/api/v1/access/roles", "access:manage"),
                 new Guarded(HttpMethod.PUT, "/api/v1/access/users/u1/roles", "access:manage"),
                 new Guarded(HttpMethod.PATCH, "/api/v1/access/users/u1/zones", "access:manage"),
+                new Guarded(HttpMethod.PUT, "/api/v1/access/users/u1/sites", "access:manage"),
                 new Guarded(HttpMethod.DELETE, "/api/v1/access/roles/r1", "access:manage"));
     }
 
@@ -288,7 +320,10 @@ class AuthorizationMatrixTest {
     void mapReadsDriversNeedStayOpenAndTheOverlapCheckIsLeftToTheService() {
         Map<String, Object> driver = Map.of("role", "driver", "permissions", List.of());
         for (String path : List.of("/api/v1/mapping/zones/z1/spots", "/api/v1/mapping/zones/z1/geojson", "/api/v1/mapping/spots/s1",
-                "/api/v1/zones/nearest", "/api/v1/zones")) {
+                "/api/v1/zones/nearest", "/api/v1/zones", "/api/v1/zones/z1/rules",
+                // the site twins (ADR 0009) stay open the same way
+                "/api/v1/mapping/sites/s1/spots", "/api/v1/mapping/sites/s1/geojson", "/api/v1/mapping/sites/s1/rules",
+                "/api/v1/sites", "/api/v1/sites/s1", "/api/v1/sites/s1/spots", "/api/v1/sites/s1/spots/geojson", "/api/v1/sites/s1/rules")) {
             assertThat(status(HttpMethod.GET, path, driver)).as(path).isEqualTo(200);
         }
         // mapping:view or spot:write alone must get through the gateway (the service accepts either), without zone:write
@@ -340,7 +375,8 @@ class AuthorizationMatrixTest {
 
     @Test
     void finesAndUserProfileNeedOnlyAValidToken() {
-        for (String path : List.of("/api/v1/fines/plate/ABC123", "/api/v1/fines/zone/z1", "/api/v1/fines/f1", "/api/v1/users/me")) {
+        for (String path : List.of("/api/v1/fines/plate/ABC123", "/api/v1/fines/zone/z1", "/api/v1/fines/site/s1", "/api/v1/fines/f1",
+                "/api/v1/users/me")) {
             assertThat(status(HttpMethod.GET, path, null)).as(path + " anonymous").isEqualTo(401);
             assertThat(status(HttpMethod.GET, path, Map.of("role", "driver", "permissions", List.of()))).as(path + " driver").isEqualTo(200);
             assertThat(status(HttpMethod.GET, path, Map.of("role", "operator", "permissions", List.of()))).as(path + " operator").isEqualTo(200);
