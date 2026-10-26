@@ -103,7 +103,7 @@ spring:
             - id: parking-mapping
               uri: ${PARKING_MAPPING_URL:http://localhost:8083}
               predicates:
-                - Path=/api/v1/mapping/**,/api/v1/zones/**
+                - Path=/api/v1/mapping/**,/api/v1/zones/**,/api/v1/sites/**
               filters:
                 - name: RequestSize
                   args: { maxSize: 4MB }
@@ -404,3 +404,5 @@ parkview:
       - { paths: ["/api/v1/zones/check-overlap"], methods: [POST], access: AUTHENTICATED }
       # zone geometry drives billing: its own permission (admin only by default)
       - { paths: ["/api/v1/zones", "/api/v1/zones/**"], methods: [POST, PUT, PATCH, DELETE], access: PERMISSION, permission: "zone:write" }
+      # a site is the place a zone sits in (ADR 0009): created and changed with the same permission as zones
+      - { paths: ["/api/v1/sites", "/api/v1/sites/**"], methods: [POST, PUT, PATCH, DELETE], access: PERMISSION, permission: "zone:write" }
