@@ -5,7 +5,9 @@ import com.parkview.gateway.security.ParkviewJwtConverter;
 import com.parkview.gateway.security.RuleAuthorizer;
 import com.parkview.gateway.security.SseTokenBearerConverter;
 import com.parkview.gateway.web.ProblemResponses;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.MessageSource;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -44,7 +46,8 @@ public class SecurityConfig {
             SecurityProperties security,
             ReactiveJwtDecoder jwtDecoder,
             CorsConfigurationSource cors,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            @Qualifier("errorMessages") MessageSource errorMessages) {
 
         http
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
@@ -53,7 +56,7 @@ public class SecurityConfig {
                 .logout(ServerHttpSecurity.LogoutSpec::disable)
                 .cors(c -> c.configurationSource(cors));
         writeHeaders(http, gateway.docsEnabled());
-        writeProblemErrors(http, objectMapper);
+        writeProblemErrors(http, objectMapper, errorMessages);
         http.oauth2ResourceServer(o -> o
                 .bearerTokenConverter(new SseTokenBearerConverter(gateway))
                 .jwt(j -> j.jwtDecoder(jwtDecoder).jwtAuthenticationConverter(ParkviewJwtConverter.create(security.legacyRoleFallback()))));
@@ -84,12 +87,15 @@ public class SecurityConfig {
                 .permissionsPolicy(p -> p.policy("camera=(), microphone=(), geolocation=()")));
     }
 
-    private static void writeProblemErrors(ServerHttpSecurity http, ObjectMapper objectMapper) {
+    /** 401 and 403 in the language of the caller ({@code Accept-Language}); the codes are {@code error.unauthorized} and {@code error.forbidden}. */
+    private static void writeProblemErrors(ServerHttpSecurity http, ObjectMapper objectMapper, MessageSource messages) {
         http.exceptionHandling(e -> e
-                .authenticationEntryPoint((exchange, ex) -> ProblemResponses.write(
-                        exchange, objectMapper, HttpStatus.UNAUTHORIZED, "Unauthorized", "Authentication is required"))
-                .accessDeniedHandler((exchange, ex) -> ProblemResponses.write(
-                        exchange, objectMapper, HttpStatus.FORBIDDEN, "Forbidden", "You are not allowed to perform this action")));
+                .authenticationEntryPoint((exchange, ex) -> ProblemResponses.writeLocalized(
+                        exchange, objectMapper, messages, HttpStatus.UNAUTHORIZED,
+                        "title.unauthorized", "Unauthorized", "error.unauthorized", "Authentication is required"))
+                .accessDeniedHandler((exchange, ex) -> ProblemResponses.writeLocalized(
+                        exchange, objectMapper, messages, HttpStatus.FORBIDDEN,
+                        "title.forbidden", "Forbidden", "error.forbidden", "You are not allowed to perform this action")));
     }
 
     /** Metrics are for the platform only: callers must present the internal API key. */

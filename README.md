@@ -89,6 +89,24 @@ Claims (written by the Supabase access-token hook, ADR 0002):
 * The access log records route id, status, duration and user id - never paths or query strings (they carry plates and tokens).
 * `/actuator/health` and `/actuator/info` are public; `/actuator/prometheus` requires the internal API key; everything else is denied.
 
+## Error texts and languages
+
+The errors the gateway writes itself (401 and 403 of the security chain, no route, upstream down or too slow, unexpected failure) are
+`application/problem+json` whose `title` and `detail` (and `message`, its copy) are in the language of the caller: the
+`Accept-Language` header decides (`sv`, `sv-SE`, `en`...), a missing or unknown language gets English, never the language of the
+server. Each carries the stable `code` of its detail (`error.unauthorized`, `error.forbidden`, `error.noRoute`,
+`error.upstreamUnavailable`, `error.upstreamTimeout`, `error.internal`, `error.http.<status>`), which clients may switch on; the code
+never changes, the text may. Errors of the services behind the gateway pass through untouched (the services translate them, with the same
+header). Logs stay English. The reactive chain has no MVC locale resolver: `RequestLocales` reads the header of the exchange.
+
+* The texts live in `src/main/resources/messages/errors.properties` (English base, complete) and `errors_sv.properties` (Swedish):
+  `title.<reason>` and `error.<reason>`; a status without an entry (for example 418) keeps the English reason phrase.
+  `ErrorBundleParityTest` checks keys, placeholders and apostrophes of a new language file.
+* In code: `ProblemResponses.writeLocalized(exchange, mapper, messages, status, titleKey, title, errorKey, detail)` (the English texts are the
+  fallback, byte for byte the old ones); `ProblemResponses.write(...)` without a code still works.
+* The rate limiter's 429 (`RequestRateLimiter`) is Spring Cloud Gateway's own empty response and has no body to translate.
+* Left English on purpose: the `IllegalArgumentException` of a rule that does not validate (start-up only) and the log lines.
+
 ## Configuration
 
 | Variable | Default | Description |

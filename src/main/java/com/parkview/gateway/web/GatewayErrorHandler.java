@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.netty.handler.timeout.ReadTimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.web.reactive.error.ErrorWebExceptionHandler;
+import org.springframework.context.MessageSource;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
@@ -19,7 +21,10 @@ import java.util.concurrent.TimeoutException;
 
 /**
  * Turns gateway-level failures (no such route, upstream down, upstream too slow) into the platform's
- * problem+json instead of Spring's default error page, without leaking hostnames or stack traces.
+ * problem+json instead of Spring's default error page, without leaking hostnames or stack traces. Title and detail are in the
+ * language of the {@code Accept-Language} header (English without one or for an unknown language) and the problem carries the stable
+ * {@code code} of the detail ({@code error.noRoute}, {@code error.upstreamUnavailable}, {@code error.upstreamTimeout},
+ * {@code error.internal}, {@code error.http.<status>}).
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
@@ -28,9 +33,11 @@ public class GatewayErrorHandler implements ErrorWebExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GatewayErrorHandler.class);
 
     private final ObjectMapper mapper;
+    private final MessageSource messages;
 
-    public GatewayErrorHandler(ObjectMapper mapper) {
+    public GatewayErrorHandler(ObjectMapper mapper, @Qualifier("errorMessages") MessageSource messages) {
         this.mapper = mapper;
+        this.messages = messages;
     }
 
     @Override
@@ -42,7 +49,27 @@ public class GatewayErrorHandler implements ErrorWebExceptionHandler {
             log.warn("Gateway error {} for requestId={}: {}",
                     http.value(), exchange.getAttribute(EdgeHeadersWebFilter.REQUEST_ID_ATTRIBUTE), ex.toString());
         }
-        return ProblemResponses.write(exchange, mapper, http, title(http), detail(http));
+        return ProblemResponses.writeLocalized(exchange, mapper, messages, http,
+                titleKey(http), title(http), detailKey(http), detail(http));
+    }
+
+    private static String titleKey(HttpStatus status) {
+        return switch (status) {
+            case NOT_FOUND -> "title.noRoute";
+            case BAD_GATEWAY -> "title.badGateway";
+            case GATEWAY_TIMEOUT -> "title.gatewayTimeout";
+            case SERVICE_UNAVAILABLE -> "title.serviceUnavailable";
+            default -> "title.http." + status.value();
+        };
+    }
+
+    private static String detailKey(HttpStatus status) {
+        return switch (status) {
+            case NOT_FOUND -> "error.noRoute";
+            case BAD_GATEWAY, SERVICE_UNAVAILABLE -> "error.upstreamUnavailable";
+            case GATEWAY_TIMEOUT -> "error.upstreamTimeout";
+            default -> status.is5xxServerError() ? "error.internal" : "error.http." + status.value();
+        };
     }
 
     private static HttpStatusCode statusFor(Throwable ex) {
