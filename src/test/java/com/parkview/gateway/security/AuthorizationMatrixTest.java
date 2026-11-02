@@ -130,7 +130,6 @@ class AuthorizationMatrixTest {
                 new Guarded(HttpMethod.HEAD, "/api/v1/access/roles", "access:read"),
                 new Guarded(HttpMethod.POST, "/api/v1/access/roles", "access:manage"),
                 new Guarded(HttpMethod.PUT, "/api/v1/access/users/u1/roles", "access:manage"),
-                new Guarded(HttpMethod.PATCH, "/api/v1/access/users/u1/zones", "access:manage"),
                 new Guarded(HttpMethod.PUT, "/api/v1/access/users/u1/sites", "access:manage"),
                 new Guarded(HttpMethod.DELETE, "/api/v1/access/roles/r1", "access:manage"));
     }
@@ -252,7 +251,7 @@ class AuthorizationMatrixTest {
 
     @Test
     void tokensWithoutAPermissionsClaimGetTheRoleDefaults() {
-        Map<String, Object> operator = Map.of("role", "operator", "zones", List.of("z1"));
+        Map<String, Object> operator = Map.of("role", "operator", "sites", List.of("z1"));
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/zone/z1", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.PATCH, "/api/v1/violations/7/resolve", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/mapping/spots", operator)).isEqualTo(200);
