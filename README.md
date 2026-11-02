@@ -11,7 +11,7 @@ Browser / camera --HTTPS--> api-gateway --> session | rule | mapping | payment |
                               +-- strips identity headers a client could spoof, adds the service key on the AI route
 ```
 
-The services validate the JWT again and enforce object ownership (their own zones / plates); the gateway keeps
+The services validate the JWT again and enforce object ownership (their own sites / plates); the gateway keeps
 unauthorised traffic away from them and gives every error the same shape.
 
 ## Structure
