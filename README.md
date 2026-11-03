@@ -8,10 +8,10 @@ Browser / camera --HTTPS--> api-gateway --> session | rule | mapping | payment |
                               |
                               +-- validates the Supabase JWT (ES256, JWKS, issuer + audience)
                               +-- CORS (answered before authorisation), request id, rate limits, size limits, timeouts
-                              +-- strips identity headers a client could spoof, adds the service key on the AI route
+                              +-- strips identity headers a client could spoof, adds the ai-detection key on the AI route
 ```
 
-The services validate the JWT again and enforce object ownership (their own sites / plates); the gateway keeps
+The services validate the JWT again and enforce object ownership (an operator's sites and a driver's plates are looked up by the services at authentication-service, not carried in the token; the gateway never asks, it enforces role and permission only); the gateway keeps
 unauthorised traffic away from them and gives every error the same shape.
 
 ## Structure
@@ -38,7 +38,7 @@ Code layout (`com.parkview.gateway`):
 | `/api/v1/detections/**` | ingestion-service | rewritten to `/detections/**` (bare path too), 64 KB bodies, 10 req/s per IP; `GET` `violation:read`, `PATCH detections/*/review` `violation:resolve` |
 | `/api/v1/files/**` | file-service | 22 MB bodies; uploads `file:upload`, `GET snapshots/**` `file:view`, `GET evidence/*/url` any signed-in user (owners need it, the service wants `file:view` of staff) |
 | `/api/v1/notifications/**`, `/api/v1/lookup/**`, `/api/v1/payments/**` | notification / lookup / payment | `payments/webhook` is public (Stripe signature); everything under `notifications/**` (list, read, read-all, push-subscription, test-push) needs a valid token, the service scopes it to the token subject |
-| `/api/v1/ai/**` | ai-detection-service | rewritten to `/**`, needs `ai:use`, gateway adds `X-Internal-Api-Key` |
+| `/api/v1/ai/**` | ai-detection-service | rewritten to `/**`, needs `ai:use`, gateway adds `X-Internal-Api-Key` (`AI_DETECTION_INTERNAL_API_KEY`) |
 
 GET requests to read-only services are retried twice on 502/503/504. Upstream calls time out after 15 s
 (connect 2 s), except the stream of `/api/v1/events/**` (no timeout) and `POST /api/v1/cameras/*/calibration/scan`, which has
@@ -76,6 +76,7 @@ Claims (written by the Supabase access-token hook, ADR 0002):
 
 * `app_metadata.role` (`admin` \| `operator` \| `driver`) becomes `ROLE_*`; ADMIN implies OPERATOR.
 * `app_metadata.permissions` (string[]) becomes one authority per entry, named exactly like the permission. Names are matched exactly (no prefix, case folding or wildcards).
+* Nothing else is read: the token carries no `sites` and no `plates` claim (ADR 0011), so the gateway has no site or plate scope and makes no site or plate lookup of its own.
 * `parkview.security.legacy-role-fallback` (`LEGACY_ROLE_FALLBACK`, default `true`): a token **without** a `permissions` claim gets the default permissions of its role
   (`defaultsByRole` in the contract), so tokens minted before the rollout keep working. A token that has the claim, even `[]`, is never supplemented:
   an admin whose permissions were all revoked has none. Set it to `false` once all tokens carry the claim.
@@ -114,7 +115,8 @@ header). Logs stay English. The reactive chain has no MVC locale resolver: `Requ
 | `PORT` | 8080 | listen port |
 | `SUPABASE_URL` | - (required) | Supabase project URL; issuer is `<url>/auth/v1` |
 | `SUPABASE_AUDIENCE` | `authenticated` | required `aud` claim |
-| `INTERNAL_API_KEY` | empty | shared secret for metrics and the AI route; empty disables both |
+| `OPS_API_KEY` | empty | the operations key, sent as `X-Internal-Api-Key` by the scraper to this gateway's own `/actuator/prometheus`; empty disables it (the gateway has no `INTERNAL_API_KEY`: no service calls it internally) |
+| `AI_DETECTION_INTERNAL_API_KEY` | empty | the ai-detection-service's internal key; the gateway sends it as `X-Internal-Api-Key` on the `ai-service` route (never the gateway's own key). To rotate: the callee accepts old and new (`INTERNAL_API_KEY_PREVIOUS`), roll this value to the new key, then drop the previous one |
 | `FRONTEND_URL` | `http://localhost:5173` | CORS origin(s) |
 | `REDIS_HOST` / `REDIS_PORT` | `localhost` / `6379` | rate limiter (fails open when Redis is down) |
 | `*_SERVICE_URL` etc. | `http://localhost:<port>` | downstream base URLs: `AUTH_SERVICE_URL`, `RULE_ENGINE_URL`, `SESSION_SERVICE_URL`, `PARKING_MAPPING_URL`, `EVENT_STREAMING_URL`, `INGESTION_SERVICE_URL`, `FILE_SERVICE_URL`, `NOTIFICATION_SERVICE_URL`, `LOOKUP_SERVICE_URL`, `PAYMENT_SERVICE_URL`, `AI_SERVICE_URL` |
