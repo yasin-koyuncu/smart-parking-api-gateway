@@ -147,7 +147,7 @@ class GatewayRoutingTest {
             registry.add(name, () -> upstream);
         }
         registry.add("LOOKUP_SERVICE_URL", () -> "http://localhost:1");   // nothing listens: simulates a dead service
-        registry.add("INTERNAL_API_KEY", () -> "test-internal-key");
+        registry.add("AI_DETECTION_INTERNAL_API_KEY", () -> "test-ai-detection-key");
     }
 
     @BeforeEach
@@ -377,7 +377,7 @@ class GatewayRoutingTest {
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isOk();
         RecordedRequest upstream = upstreamRequest();
         assertThat(upstream.getPath()).isEqualTo("/anpr/read");
-        assertThat(upstream.getHeaders().values("X-Internal-Api-Key")).containsExactly("test-internal-key");
+        assertThat(upstream.getHeaders().values("X-Internal-Api-Key")).containsExactly("test-ai-detection-key");
     }
 
     // ── permissions (ADR 0002), real ES256 tokens through the whole stack ───────

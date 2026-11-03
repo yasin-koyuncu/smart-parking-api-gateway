@@ -138,7 +138,6 @@ class GatewayTracingTest {
         registry.add("spring.data.redis.port", () -> REDIS != null ? REDIS.getMappedPort(6379) : 6379);
         registry.add("management.health.redis.enabled", () -> "false");
         registry.add("INGESTION_SERVICE_URL", () -> upstream);
-        registry.add("INTERNAL_API_KEY", () -> "test-internal-key");
     }
 
     @BeforeEach

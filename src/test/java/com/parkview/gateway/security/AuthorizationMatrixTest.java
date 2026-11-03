@@ -251,7 +251,7 @@ class AuthorizationMatrixTest {
 
     @Test
     void tokensWithoutAPermissionsClaimGetTheRoleDefaults() {
-        Map<String, Object> operator = Map.of("role", "operator", "sites", List.of("z1"));
+        Map<String, Object> operator = Map.of("role", "operator");
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/zone/z1", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.PATCH, "/api/v1/violations/7/resolve", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/mapping/spots", operator)).isEqualTo(200);
@@ -280,7 +280,7 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.POST, "/api/v1/access/roles", admin)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/events/stream/operator", admin)).isEqualTo(200);
 
-        Map<String, Object> driver = Map.of("role", "driver", "plates", List.of("ABC123"));
+        Map<String, Object> driver = Map.of("role", "driver");
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/zone/z1", driver)).isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/plate/ABC123", driver)).isEqualTo(200);
     }
@@ -338,7 +338,7 @@ class AuthorizationMatrixTest {
 
     @Test
     void theDriverSideOfADisputeNeedsOnlyAValidTokenAndTheServiceDecidesOnOwnership() {
-        Map<String, Object> driver = Map.of("role", "driver", "permissions", List.of(), "plates", List.of("ABC123"));
+        Map<String, Object> driver = Map.of("role", "driver", "permissions", List.of());
         Map<String, Object> operator = Map.of("role", "operator", "permissions", List.of());
         for (Object[] call : new Object[][]{
                 {HttpMethod.GET, "/api/v1/fines/f1/explanation"}, {HttpMethod.GET, "/api/v1/fines/f1/dispute"},
@@ -353,7 +353,7 @@ class AuthorizationMatrixTest {
 
     @Test
     void theReviewQueueAndTheDecisionAreClosedToDriversEvenWithTheirOwnRoutesOpen() {
-        Map<String, Object> driver = Map.of("role", "driver", "plates", List.of("ABC123"));
+        Map<String, Object> driver = Map.of("role", "driver");
         assertThat(status(HttpMethod.GET, "/api/v1/disputes", driver)).isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/disputes?status=all", driver)).isEqualTo(403);
         assertThat(status(HttpMethod.POST, "/api/v1/disputes/d1/decision", driver)).isEqualTo(403);

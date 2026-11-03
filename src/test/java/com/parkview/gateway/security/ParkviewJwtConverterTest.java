@@ -41,7 +41,7 @@ class ParkviewJwtConverterTest {
     @Test
     void unknownOrMissingRoleGivesNoAuthorities() {
         assertThat(roles(jwt(Map.of("role", "superuser")))).isEmpty();
-        assertThat(roles(jwt(Map.of("plates", List.of("ABC123"))))).isEmpty();
+        assertThat(roles(jwt(Map.of("permissions", List.of("zone:write"))))).isEmpty();
         assertThat(roles(jwt(null))).isEmpty();
     }
 
