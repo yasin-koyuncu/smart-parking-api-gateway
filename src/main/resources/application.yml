@@ -235,7 +235,7 @@ spring:
                     redis-rate-limiter.replenishRate: 5
                     redis-rate-limiter.burstCapacity: 10
 
-            # AI service is internal: operators reach it through the gateway, which adds the service key.
+            # AI service is internal: operators reach it through the gateway, which adds the ai-detection key (AI_DETECTION_INTERNAL_API_KEY, never the gateway's own).
             - id: ai-service
               uri: ${AI_SERVICE_URL:http://localhost:8000}
               predicates:
@@ -243,7 +243,7 @@ spring:
               filters:
                 - RewritePath=/api/v1/ai/(?<segment>.*), /${segment}
                 - RemoveRequestHeader=X-Internal-Api-Key
-                - AddRequestHeader=X-Internal-Api-Key, ${INTERNAL_API_KEY:}
+                - AddRequestHeader=X-Internal-Api-Key, ${AI_DETECTION_INTERNAL_API_KEY:}
                 - name: RequestSize
                   args: { maxSize: 12MB }
                 - name: RequestRateLimiter
@@ -308,7 +308,8 @@ parkview:
   security:
     issuer: ${SUPABASE_URL}/auth/v1
     audience: ${SUPABASE_AUDIENCE:authenticated}
-    internal-api-key: ${INTERNAL_API_KEY:}
+    # Protects the gateway's own /actuator/prometheus: an operations path, so it takes the ops key like every other service.
+    internal-api-key: ${OPS_API_KEY:}
     # Tokens without app_metadata.permissions get the default permissions of their role (ADR 0002 rollout). Turn off once all tokens carry the claim.
     legacy-role-fallback: ${LEGACY_ROLE_FALLBACK:true}
 
@@ -331,7 +332,7 @@ parkview:
       event-streaming: ${EVENT_STREAMING_URL:http://localhost:8084}
 
     # Declarative edge authorisation: first match wins, anything unmatched needs an authenticated user.
-    # The services re-check roles AND object ownership (sites/plates) themselves. Scope is by site (ADR 0009 of smart-parking-e2e): every
+    # The services re-check roles AND object ownership (sites, plate ownership) themselves. Scope is by site (ADR 0009 of smart-parking-e2e): every
     # zone route has a site twin with exactly the same permission; zone ids stay valid (a zone created before sites has a site of its id).
     rules:
       # public: login/refresh flows, Stripe webhook (signature-authenticated), device endpoints (api key), KPI counter
@@ -354,7 +355,7 @@ parkview:
       - { paths: ["/api/v1/fines/*/explanation"], methods: [GET], access: AUTHENTICATED }
       - { paths: ["/api/v1/fines/*/dispute"], methods: [GET, POST], access: AUTHENTICATED }
       - { paths: ["/api/v1/disputes/*/withdraw"], methods: [POST], access: AUTHENTICATED }
-      # the review queue and the decision of a dispute: fine:manage (rule-service also limits it to the sites of the token)
+      # the review queue and the decision of a dispute: fine:manage (rule-service also limits it to the operator's sites, which it looks up)
       - { paths: ["/api/v1/disputes", "/api/v1/disputes/**"], access: PERMISSION, permission: "fine:manage" }
       - { paths: ["/api/v1/fines/**"], access: AUTHENTICATED }
       - { paths: ["/api/v1/users/**"], access: AUTHENTICATED }     # incl. GET/POST /users/me/plates and DELETE /users/me/plates/*

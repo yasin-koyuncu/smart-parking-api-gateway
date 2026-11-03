@@ -11,7 +11,7 @@ import org.springframework.validation.annotation.Validated;
  * @param issuer         expected JWT issuer, {@code <SUPABASE_URL>/auth/v1}
  * @param jwksUri        JWKS endpoint; defaults to {@code <issuer>/.well-known/jwks.json}
  * @param audience       required {@code aud} claim
- * @param internalApiKey shared secret presented to internal endpoints (actuator metrics, AI service);
+ * @param internalApiKey key that protects this gateway's own {@code /actuator/prometheus} (the AI route uses {@code AI_DETECTION_INTERNAL_API_KEY} instead);
  *                       blank disables those features
  * @param legacyRoleFallback while true, a token without {@code app_metadata.permissions} gets the default
  *                       permissions of its role (rollout of ADR 0002); a token that has the claim, even
