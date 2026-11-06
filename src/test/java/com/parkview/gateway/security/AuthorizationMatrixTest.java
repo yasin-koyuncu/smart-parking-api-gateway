@@ -19,8 +19,8 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Authorisation matrix of the shipped rules ({@code application.yml}) against permission-only tokens, the legacy
- * role fallback and the fail-closed cases. Runs on a mock server (no sockets), so it also works where Netty
+ * Authorisation matrix of the shipped rules ({@code application.yml}) against permission-only tokens, the role
+ * fallback being off by default, the explicit "any valid token" rules and the deny-by-default cases. Runs on a mock server (no sockets), so it also works where Netty
  * cannot open a loopback connection.
  */
 @SpringBootTest(classes = AuthorizationTestApp.class, properties = "SUPABASE_URL=http://issuer.test")
@@ -152,6 +152,11 @@ class AuthorizationMatrixTest {
         return request.exchange().returnResult(String.class).getStatus().value();
     }
 
+    /** A token as the token hook writes it: the role and the default permissions of that role in the {@code permissions} claim. */
+    private static Map<String, Object> defaults(String role) {
+        return Map.of("role", role, "permissions", Permissions.defaultsFor(role).stream().sorted().toList());
+    }
+
     /** A token that carries permissions only: no role at all. */
     private static Map<String, Object> permissionsOnly(Set<String> permissions) {
         return Map.of("permissions", List.copyOf(permissions));
@@ -218,7 +223,7 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/7", driver)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/7/history", driver)).isEqualTo(403);
         // the finer rules apply to the listed methods only
-        assertThat(status(HttpMethod.GET, "/api/v1/sessions/7/end", driver)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/sessions/7/end", driver)).as("not listed for GET: denied").isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/void", driver)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/fines/f1/history", driver)).isEqualTo(200);
     }
@@ -247,11 +252,11 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.POST, "/api/v1/access/roles", reader)).isEqualTo(403);
     }
 
-    // ── legacy role fallback (tokens minted before permissions existed) ─────────
+    // ── role defaults (the permissions claim a token carries) and the legacy role fallback (off by default) ──
 
     @Test
-    void tokensWithoutAPermissionsClaimGetTheRoleDefaults() {
-        Map<String, Object> operator = Map.of("role", "operator");
+    void tokensCarryingTheRoleDefaultsGetExactlyThose() {
+        Map<String, Object> operator = defaults("operator");
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/zone/z1", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.PATCH, "/api/v1/violations/7/resolve", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/mapping/spots", operator)).isEqualTo(200);
@@ -266,12 +271,11 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/search", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/history", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/evidence", operator)).isEqualTo(200);
-        // not in the operator defaults: zone writes (billing) and access management
         assertThat(status(HttpMethod.POST, "/api/v1/zones", operator)).isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/access/roles", operator)).isEqualTo(403);
         assertThat(status(HttpMethod.POST, "/api/v1/access/roles", operator)).isEqualTo(403);
 
-        Map<String, Object> admin = Map.of("role", "admin");
+        Map<String, Object> admin = defaults("admin");
         assertThat(status(HttpMethod.POST, "/api/v1/sessions/7/void", admin)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/fines/f1/mark-paid", admin)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/disputes", admin)).isEqualTo(200);
@@ -280,15 +284,24 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.POST, "/api/v1/access/roles", admin)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/events/stream/operator", admin)).isEqualTo(200);
 
-        Map<String, Object> driver = Map.of("role", "driver");
+        Map<String, Object> driver = defaults("driver");
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/zone/z1", driver)).isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/plate/ABC123", driver)).isEqualTo(200);
     }
 
     @Test
-    void anEmptyPermissionsClaimDisablesTheFallback() {
-        assertThat(status(HttpMethod.GET, "/api/v1/sessions/zone/z1", Map.of("role", "operator", "permissions", List.of()))).isEqualTo(403);
-        assertThat(status(HttpMethod.GET, "/api/v1/sessions/zone/z1", Map.of("role", "operator"))).isEqualTo(200);
+    void theRoleFallbackIsOffByDefaultSoATokenWithoutPermissionsHoldsNothingWhateverItsRole() {
+        for (String role : List.of("admin", "operator")) {
+            Map<String, Object> noClaim = Map.of("role", role);
+            assertThat(status(HttpMethod.GET, "/api/v1/sessions/zone/z1", noClaim)).as(role + " without the claim").isEqualTo(403);
+            assertThat(status(HttpMethod.POST, "/api/v1/zones", noClaim)).as(role + " without the claim").isEqualTo(403);
+            assertThat(status(HttpMethod.POST, "/api/v1/access/roles", noClaim)).as(role + " without the claim").isEqualTo(403);
+            assertThat(status(HttpMethod.GET, "/api/v1/events/stream/operator", noClaim)).as(role + " without the claim").isEqualTo(403);
+            // an empty claim is no different
+            assertThat(status(HttpMethod.GET, "/api/v1/sessions/zone/z1", Map.of("role", role, "permissions", List.of()))).isEqualTo(403);
+        }
+        // but it is still a valid token: the any-valid-token routes stay open
+        assertThat(status(HttpMethod.GET, "/api/v1/access/me/access", Map.of("role", "admin"))).isEqualTo(200);
     }
 
     // ── files and mapping reads (permission rules where unambiguous) ────────────
@@ -305,7 +318,7 @@ class AuthorizationMatrixTest {
 
     @Test
     void operatorsWithTheFileDefaultsReachFilesAndMapHistory() {
-        Map<String, Object> operator = Map.of("role", "operator");
+        Map<String, Object> operator = defaults("operator");
         assertThat(status(HttpMethod.POST, "/api/v1/files/evidence/f1", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/files/snapshots/url", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/mapping/zones/z1/versions", operator)).isEqualTo(200);
@@ -321,7 +334,7 @@ class AuthorizationMatrixTest {
         for (String path : List.of("/api/v1/mapping/zones/z1/spots", "/api/v1/mapping/zones/z1/geojson", "/api/v1/mapping/spots/s1",
                 "/api/v1/zones/nearest", "/api/v1/zones", "/api/v1/zones/z1/rules",
                 // the site twins (ADR 0009) stay open the same way
-                "/api/v1/mapping/sites/s1/spots", "/api/v1/mapping/sites/s1/geojson", "/api/v1/mapping/sites/s1/rules",
+                "/api/v1/mapping/sites/s1/spots", "/api/v1/mapping/sites/s1/spots/geojson",
                 "/api/v1/sites", "/api/v1/sites/s1", "/api/v1/sites/s1/spots", "/api/v1/sites/s1/spots/geojson", "/api/v1/sites/s1/rules")) {
             assertThat(status(HttpMethod.GET, path, driver)).as(path).isEqualTo(200);
         }
@@ -402,8 +415,11 @@ class AuthorizationMatrixTest {
         // capture is POST only and needs ai:use, not camera:admin; `*` is one segment, so deeper paths are not capture
         assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/capture", permissionsOnly(Set.of("camera:admin")))).isEqualTo(403);
         assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/capture", null)).isEqualTo(401);
-        assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/capture", driver)).isEqualTo(200);
-        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/x/capture", driver)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/capture", driver)).as("capture is POST only: denied").isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/x/capture", driver)).as("not a camera route: denied").isEqualTo(403);
+        // the status of one camera: any valid token, the service wants camera:admin or stream:operator
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1", null)).isEqualTo(401);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1", driver)).isEqualTo(200);
     }
 
     @Test
@@ -415,15 +431,15 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/ptz/presets", permissionsOnly(Set.of("camera:admin")))).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/ptz/presets", permissionsOnly(Set.of("ai:use", "stream:operator")))).isEqualTo(403);
         // the default operator holds both, a driver neither, and nobody gets in without a token
-        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/calibration/scan", Map.of("role", "operator"))).isEqualTo(200);
-        assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/ptz/presets", Map.of("role", "operator"))).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/calibration/scan", defaults("operator"))).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/ptz/presets", defaults("operator"))).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/calibration/scan", Map.of("role", "driver"))).isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/ptz/presets", Map.of("role", "driver"))).isEqualTo(403);
         assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/calibration/scan", null)).isEqualTo(401);
         assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/ptz/presets", null)).isEqualTo(401);
         // `*` is one segment, and a camera id `admin` stays under the admin rule
         assertThat(status(HttpMethod.POST, "/api/v1/cameras/admin/calibration/scan", permissionsOnly(Set.of("ai:use")))).isEqualTo(403);
-        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/x/calibration/scan", Map.of("role", "driver", "permissions", List.of()))).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/x/calibration/scan", Map.of("role", "driver", "permissions", List.of()))).isEqualTo(403);
         // the capture rule is untouched
         assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/capture", permissionsOnly(Set.of("camera:admin")))).isEqualTo(403);
     }
@@ -437,7 +453,7 @@ class AuthorizationMatrixTest {
             assertThat(status(HttpMethod.GET, path, viewer)).as(path + " viewer").isEqualTo(200);
             assertThat(status(HttpMethod.GET, path, editor)).as(path + " editor (the service wants mapping:view to read)").isEqualTo(403);
             assertThat(status(HttpMethod.GET, path, driver)).as(path + " driver").isEqualTo(403);
-            assertThat(status(HttpMethod.GET, path, Map.of("role", "operator"))).as(path + " operator with the defaults").isEqualTo(200);
+            assertThat(status(HttpMethod.GET, path, defaults("operator"))).as(path + " operator with the defaults").isEqualTo(200);
             assertThat(status(HttpMethod.GET, path, null)).as(path + " anonymous").isEqualTo(401);
         }
         for (String path : List.of("/api/v1/mapping/areas", "/api/v1/mapping/cameras/c1/views", "/api/v1/mapping/views/v1/import/calibration")) {
@@ -456,8 +472,8 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.GET, "/api/v1/detections", permissionsOnly(Set.of("violation:resolve")))).isEqualTo(403);
         assertThat(status(HttpMethod.HEAD, "/api/v1/detections", permissionsOnly(Set.of("violation:read")))).isEqualTo(200);
         // default operator reads and reviews, a driver does neither
-        assertThat(status(HttpMethod.GET, "/api/v1/detections", Map.of("role", "operator"))).isEqualTo(200);
-        assertThat(status(HttpMethod.PATCH, "/api/v1/detections/d1/review", Map.of("role", "operator"))).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/detections", defaults("operator"))).isEqualTo(200);
+        assertThat(status(HttpMethod.PATCH, "/api/v1/detections/d1/review", defaults("operator"))).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/detections", Map.of("role", "driver"))).isEqualTo(403);
         assertThat(status(HttpMethod.PATCH, "/api/v1/detections/d1/review", Map.of("role", "driver"))).isEqualTo(403);
     }
@@ -485,7 +501,102 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.POST, "/api/v1/auth/login", null)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/count/active", null)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/zones/nearest", Map.of("role", "driver"))).isEqualTo(200);
-        assertThat(status(HttpMethod.GET, "/api/v1/mapping/zones/z1", Map.of("role", "driver"))).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/mapping/zones/z1/spots", Map.of("role", "driver"))).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/plate/ABC123", null)).isEqualTo(401);
+    }
+
+    // ── deny by default: nothing is open unless a rule says so ──────────────────
+
+    /** A caller who holds every role and permission: only a missing rule can keep it out. */
+    private static Map<String, Object> everything() {
+        return Map.of("role", "admin", "permissions", Permissions.sorted());
+    }
+
+    @Test
+    void aPathNoRuleListsIsDeniedUnderARoutedPrefixToo() {
+        record Call(HttpMethod method, String path) {
+        }
+        for (Call call : List.of(
+                // routed prefixes, but not an endpoint of the service, or not with this method
+                new Call(HttpMethod.GET, "/api/v1/sessions/7/end"), new Call(HttpMethod.GET, "/api/v1/sessions/7/pay"),
+                new Call(HttpMethod.DELETE, "/api/v1/sessions/7"), new Call(HttpMethod.GET, "/api/v1/sessions/a/b/c"),
+                new Call(HttpMethod.GET, "/api/v1/violations"), new Call(HttpMethod.POST, "/api/v1/violations/plate/ABC123"),
+                new Call(HttpMethod.GET, "/api/v1/mapping"), new Call(HttpMethod.GET, "/api/v1/mapping/zones/z1"),
+                new Call(HttpMethod.GET, "/api/v1/mapping/unknown"), new Call(HttpMethod.GET, "/api/v1/mapping/sites/s1/rules"),
+                new Call(HttpMethod.GET, "/api/v1/zones/z1"), new Call(HttpMethod.GET, "/api/v1/zones/z1/other"),
+                new Call(HttpMethod.GET, "/api/v1/sites/s1/other"),
+                new Call(HttpMethod.GET, "/api/v1/events"), new Call(HttpMethod.GET, "/api/v1/events/stream"),
+                new Call(HttpMethod.POST, "/api/v1/events/stream/driver"),
+                new Call(HttpMethod.GET, "/api/v1/cameras/c1/other"), new Call(HttpMethod.POST, "/api/v1/cameras"),
+                new Call(HttpMethod.GET, "/api/v1/files"), new Call(HttpMethod.GET, "/api/v1/files/evidence/f1"),
+                new Call(HttpMethod.DELETE, "/api/v1/files/snapshots/url"),
+                new Call(HttpMethod.GET, "/api/v1/payments"), new Call(HttpMethod.GET, "/api/v1/payments/fines/f1/checkout"),
+                new Call(HttpMethod.POST, "/api/v1/payments/review"), new Call(HttpMethod.GET, "/api/v1/payments/other"),
+                new Call(HttpMethod.GET, "/api/v1/payments/webhook"))) {
+            assertThat(status(call.method(), call.path(), everything())).as(call + " with every role and permission").isEqualTo(403);
+            assertThat(status(call.method(), call.path(), Map.of("role", "driver", "permissions", List.of()))).as(call + " driver").isEqualTo(403);
+            assertThat(status(call.method(), call.path(), null)).as(call + " anonymous").isEqualTo(401);
+        }
+    }
+
+    @Test
+    void aPathWithoutAnyRouteIsDeniedAndNothingInternalIsReachable() {
+        for (String path : List.of("/", "/api", "/api/v1", "/api/v1/nope", "/api/v2/sessions/zone/z1", "/nope",
+                // /internal has no route and no rule: service-to-service calls never go through the gateway
+                "/internal", "/internal/v1/users/u1/plates", "/internal/v1/users/u1/sites", "/internal/v1/files/snapshots",
+                "/internal/v1/retention/run", "/api/v1/internal/fines/f1",
+                // other surfaces of the services: health, metrics and docs (off by default) are not edge endpoints
+                "/health", "/metrics", "/v3/api-docs", "/swagger-ui/index.html", "/docs/session-service/v3/api-docs", "/error")) {
+            for (HttpMethod method : List.of(HttpMethod.GET, HttpMethod.POST)) {
+                assertThat(status(method, path, everything())).as(method + " " + path + " with every role and permission").isEqualTo(403);
+                assertThat(status(method, path, null)).as(method + " " + path + " anonymous").isEqualTo(401);
+            }
+        }
+    }
+
+    @Test
+    void nonHealthActuatorStaysDeniedAndPrometheusNeedsTheKey() {
+        assertThat(status(HttpMethod.GET, "/actuator/env", everything())).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/actuator/heapdump", everything())).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/actuator/prometheus", everything())).as("no internal key").isEqualTo(403);
+    }
+
+    @Test
+    void everyPreviouslyDefaultAuthenticatedPrefixIsNowExplicitlyAuthenticated() {
+        record Call(HttpMethod method, String path) {
+        }
+        Map<String, Object> driver = Map.of("role", "driver", "permissions", List.of());
+        Map<String, Object> holdsNothing = permissionsOnly(Set.of());   // a valid token without a role or any permission
+        for (Call call : List.of(
+                new Call(HttpMethod.GET, "/api/v1/violations/plate/ABC123"),
+                new Call(HttpMethod.GET, "/api/v1/sessions/plate/ABC123"), new Call(HttpMethod.GET, "/api/v1/sessions/7"),
+                new Call(HttpMethod.GET, "/api/v1/sessions/7/events"),
+                new Call(HttpMethod.GET, "/api/v1/events/stream/driver"),
+                new Call(HttpMethod.POST, "/api/v1/payments/fines/f1/checkout"), new Call(HttpMethod.POST, "/api/v1/payments/sessions/s1/checkout"),
+                new Call(HttpMethod.GET, "/api/v1/payments/history"), new Call(HttpMethod.GET, "/api/v1/payments/review"),
+                new Call(HttpMethod.GET, "/api/v1/files/evidence/f1/url"),
+                new Call(HttpMethod.GET, "/api/v1/cameras"), new Call(HttpMethod.GET, "/api/v1/cameras/c1"),
+                new Call(HttpMethod.GET, "/api/v1/mapping/zones/z1/spots"), new Call(HttpMethod.GET, "/api/v1/mapping/zones/z1/geojson"),
+                new Call(HttpMethod.GET, "/api/v1/mapping/spots/s1"),
+                new Call(HttpMethod.GET, "/api/v1/mapping/sites/s1/spots"), new Call(HttpMethod.GET, "/api/v1/mapping/sites/s1/spots/geojson"),
+                new Call(HttpMethod.GET, "/api/v1/zones"), new Call(HttpMethod.GET, "/api/v1/zones/nearest"), new Call(HttpMethod.GET, "/api/v1/zones/z1/rules"),
+                new Call(HttpMethod.GET, "/api/v1/sites"), new Call(HttpMethod.GET, "/api/v1/sites/s1"), new Call(HttpMethod.GET, "/api/v1/sites/s1/spots"),
+                new Call(HttpMethod.GET, "/api/v1/sites/s1/spots/geojson"), new Call(HttpMethod.GET, "/api/v1/sites/s1/rules"),
+                new Call(HttpMethod.HEAD, "/api/v1/zones"), new Call(HttpMethod.HEAD, "/api/v1/sites/s1"))) {
+            assertThat(status(call.method(), call.path(), null)).as(call + " anonymous").isEqualTo(401);
+            assertThat(status(call.method(), call.path(), driver)).as(call + " driver").isEqualTo(200);
+            assertThat(status(call.method(), call.path(), holdsNothing)).as(call + " token that holds nothing").isEqualTo(200);
+        }
+    }
+
+    @Test
+    void theExplicitAuthenticatedRulesDoNotShadowThePermissionRulesBeforeThem() {
+        Map<String, Object> noPermissions = Map.of("role", "driver", "permissions", List.of());
+        for (String path : List.of("/api/v1/sessions/search", "/api/v1/mapping/areas", "/api/v1/mapping/views/v1", "/api/v1/mapping/zones/z1/versions",
+                "/api/v1/sites/s1/versions", "/api/v1/sites/s1/areas", "/api/v1/files/snapshots/url", "/api/v1/cameras/admin/snapshot-url")) {
+            assertThat(status(HttpMethod.GET, path, noPermissions)).as(path).isEqualTo(403);
+        }
+        assertThat(status(HttpMethod.POST, "/api/v1/sites", noPermissions)).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/payments/webhook", null)).as("the Stripe webhook stays public").isEqualTo(200);
     }
 }

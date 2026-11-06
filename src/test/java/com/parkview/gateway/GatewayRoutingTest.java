@@ -103,8 +103,10 @@ class GatewayRoutingTest {
         }
     }
 
+    /** A token as the token hook writes it: the role and, in {@code permissions}, the default permissions of that role. */
     private static String validToken(String role, String subject) {
-        return token(role, subject, "http://issuer.test/auth/v1", "authenticated", Instant.now().plusSeconds(300), SIGNING_KEY);
+        return token(Map.of("role", role, "permissions", Permissions.defaultsFor(role).stream().sorted().toList()), subject,
+                "http://issuer.test/auth/v1", "authenticated", Instant.now().plusSeconds(300), SIGNING_KEY);
     }
 
     private static String permissionToken(String subject, String... permissions) {
@@ -155,7 +157,7 @@ class GatewayRoutingTest {
         RECORDED.clear();
     }
 
-    /** A signed-in user with the roles and the default permissions of {@code role} (what the converter grants a legacy token). */
+    /** A signed-in user with the roles and the default permissions of {@code role}. */
     private WebTestClient as(String role, String subject) {
         List<String> authorities = new ArrayList<>(List.of("admin".equals(role) ? new String[]{"ROLE_ADMIN", "ROLE_OPERATOR"} : new String[]{"ROLE_" + role.toUpperCase()}));
         authorities.addAll(Permissions.defaultsFor(role));
@@ -395,9 +397,13 @@ class GatewayRoutingTest {
     }
 
     @Test
-    void legacyTokensFallBackToRoleDefaultsButAnEmptyPermissionsClaimDoesNot() {
+    void aRoleWithoutAPermissionsClaimIsNotAdminAndAnEmptyPermissionsClaimHoldsNothing() {
         client.post().uri("/api/v1/zones").header("Authorization", "Bearer " + validToken("admin", "ad-9"))
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isOk();
+        // the role fallback is off by default: role=admin without the claim holds nothing
+        String noClaim = token("admin", "ad-7", "http://issuer.test/auth/v1", "authenticated", Instant.now().plusSeconds(300), SIGNING_KEY);
+        client.post().uri("/api/v1/zones").header("Authorization", "Bearer " + noClaim)
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
         String revoked = token(Map.of("role", "admin", "permissions", List.of()), "ad-8", "http://issuer.test/auth/v1", "authenticated",
                 Instant.now().plusSeconds(300), SIGNING_KEY);
         client.post().uri("/api/v1/zones").header("Authorization", "Bearer " + revoked)
@@ -446,7 +452,7 @@ class GatewayRoutingTest {
         client.post().uri("/api/v1/fines/" + id + "/void").header("Authorization", reader).contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
                 .exchange().expectStatus().isForbidden();
 
-        // a default operator (legacy token) cannot correct, an admin can
+        // a default operator cannot correct, an admin can
         as("operator", "op-1").post().uri("/api/v1/sessions/" + id + "/end").contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
                 .exchange().expectStatus().isForbidden();
         as("admin", "ad-1").post().uri("/api/v1/fines/" + id + "/void").contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
@@ -614,10 +620,14 @@ class GatewayRoutingTest {
     }
 
     @Test
-    void unknownRouteAndDeadUpstreamProduceProblemJsonWithoutLeakingDetails() {
+    void anUnlistedPathIsDeniedAndADeadUpstreamProducesProblemJsonWithoutLeakingDetails() throws Exception {
+        // deny by default: no rule, no route, and not even an internal path gets further than the edge
         as("operator", "op-1").get().uri("/api/v1/nope").exchange()
-                .expectStatus().isNotFound()
+                .expectStatus().isForbidden()
                 .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON);
+        as("admin", "ad-1").get().uri("/internal/v1/users/u1/plates").exchange().expectStatus().isForbidden();
+        client.get().uri("/internal/v1/users/u1/plates").exchange().expectStatus().isUnauthorized();
+        assertThat(RECORDED.poll(300, TimeUnit.MILLISECONDS)).as("nothing reached upstream").isNull();
 
         as("operator", "op-1").get().uri("/api/v1/lookup/plate/ABC123").exchange()
                 .expectStatus().is5xxServerError()
