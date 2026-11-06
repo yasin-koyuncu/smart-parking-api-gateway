@@ -31,13 +31,13 @@ Code layout (`com.parkview.gateway`):
 | `/api/v1/access/**` | authentication-service | roles, grants and audit log (ADR 0002); `access:read` / `access:manage`, `GET /access/me/**` for any signed-in user |
 | `/api/v1/users/**` | authentication-service | profile of the signed-in user (any role, the service uses the token subject) |
 | `/api/v1/violations/**`, `/api/v1/permits/**`, `/api/v1/fines/**`, `/api/v1/disputes/**` | rule-service | fines: any signed-in user, the service decides on ownership and sites; `GET fines/*/evidence` `violation:read`; disputes: `POST fines/*/dispute`, `GET fines/*/dispute`, `GET fines/*/explanation` and `POST disputes/*/withdraw` any signed-in user (the service decides on ownership), the review queue and the decision (`GET /disputes`, `POST disputes/*/decision`) `fine:manage` |
-| `/api/v1/sessions/**` | session-service | |
+| `/api/v1/sessions/**` | session-service | `count/active` public, the rest see the rules below |
 | `/api/v1/mapping/**`, `/api/v1/zones/**`, `/api/v1/sites/**` | parking-mapping-service | spot writes: `spot:write`, zone and site writes: `zone:write`, map history (`zones/*/versions`, `zones/*/changes`, `sites/*/versions`, `sites/*/changes`, `spots/*/changes`): `mapping:view`; parking areas and camera views (`GET mapping/areas/**`, `GET mapping/sites/*/areas`, `GET mapping/views/**`, `GET mapping/cameras/*/views`): `mapping:view`, their writes (every non-GET method under `mapping/**`) `spot:write`; site rules (`mapping/sites/*/rules/**`, `sites/*/rules/**`) like zone rules `zone:write`; site spots, areas, imports and rollback under `sites/*` `spot:write` like their zone twins (ADR 0009) |
 | `/api/v1/events/**` | event-streaming | SSE, no response timeout, `?token=` allowed on `/stream/**` only |
 | `/api/v1/cameras/**` | ingestion-service | rewritten to `/cameras/**` (the bare `/api/v1/cameras` list becomes `/cameras`); `ingest` and `heartbeat` are public (camera api key), `GET /cameras` any signed-in user (the service wants `camera:admin` or `stream:operator` + zone scope), `POST cameras/*/capture` `ai:use`, `POST cameras/*/calibration/scan` `camera:admin` at the edge (the service wants `camera:admin` **and** `ai:use`) with its own route, `GET cameras/*/ptz/presets` `camera:admin`, 12 MB bodies (64 KB on the scan) |
 | `/api/v1/detections/**` | ingestion-service | rewritten to `/detections/**` (bare path too), 64 KB bodies, 10 req/s per IP; `GET` `violation:read`, `PATCH detections/*/review` `violation:resolve` |
 | `/api/v1/files/**` | file-service | 22 MB bodies; uploads `file:upload`, `GET snapshots/**` `file:view`, `GET evidence/*/url` any signed-in user (owners need it, the service wants `file:view` of staff) |
-| `/api/v1/notifications/**`, `/api/v1/lookup/**`, `/api/v1/payments/**` | notification / lookup / payment | `payments/webhook` is public (Stripe signature); everything under `notifications/**` (list, read, read-all, push-subscription, test-push) needs a valid token, the service scopes it to the token subject |
+| `/api/v1/notifications/**`, `/api/v1/lookup/**`, `/api/v1/payments/**` | notification / lookup / payment | `payments/webhook` is public (Stripe signature); `POST payments/fines/*/checkout`, `POST payments/sessions/*/checkout`, `GET payments/history` and `GET payments/review` (admin only in the service) need a valid token, every other path under `payments` is denied; everything under `notifications/**` (list, read, read-all, push-subscription, test-push) needs a valid token, the service scopes it to the token subject |
 | `/api/v1/ai/**` | ai-detection-service | rewritten to `/**`, needs `ai:use`, gateway adds `X-Internal-Api-Key` (`AI_DETECTION_INTERNAL_API_KEY`) |
 
 GET requests to read-only services are retried twice on 502/503/504. Upstream calls time out after 15 s
@@ -48,7 +48,7 @@ metadata (`response-timeout`, in milliseconds), so it applies to that path only.
 
 ## Authorisation rules
 
-Declared in `application.yml` under `parkview.gateway.rules` (first match wins, default: authenticated):
+Declared in `application.yml` under `parkview.gateway.rules` (first match wins, **default: denied**; "any valid token" is an explicit `AUTHENTICATED` rule):
 
 | Access | Meaning |
 |---|---|
@@ -66,9 +66,16 @@ The operator and admin functions are guarded by permissions, one per function (`
 `violations/zone/**` and `violations/site/**` `violation:read`, `violations/*/resolve` `violation:resolve`, `events/status` and `events/stream/operator`
 `stream:operator`, mapping writes `spot:write`, zone writes `zone:write`, map history GETs `mapping:view`, evidence and snapshot uploads `file:upload`, snapshot GETs `file:view`,
 `POST cameras/*/capture` `ai:use` (listed after `cameras/admin/**`, so a camera id `admin` stays under `camera:admin`), `POST cameras/*/calibration/scan` and `GET cameras/*/ptz/presets` `camera:admin` (a rule names one permission, so the scan, which ingestion-service restricts to `camera:admin` **and** `ai:use`, is checked for `camera:admin` here and for both there), `GET mapping/areas/**`, `GET mapping/views/**` and `GET mapping/cameras/*/views` `mapping:view` (staff read parking areas and camera views with their pictures; drivers do not; the writes are the `spot:write` rule for `mapping/**`), `GET detections` and `GET detections/**` `violation:read`, `PATCH detections/*/review` `violation:resolve`,
-`/access/**` `access:read` for GET and `access:manage` for the rest). Deliberately **not** gated here, because one gateway permission cannot express them: `GET /files/evidence/*/url`
-(owner of the fine, or staff with `file:view`, decided by file-service), `POST /zones/check-overlap` (service accepts `mapping:view`, `zone:write` or `spot:write`, so it is a plain
-authenticated rule ahead of the zone-write rule), the other mapping GETs (drivers read zones and spots), the rest of `/fines/**` (incl. `GET fines/*/explanation` and `GET`/`POST fines/*/dispute`, which drivers use for their own fines; rule-service answers 404 for fines the caller may not see) and `/users/**` incl. `/users/me/plates` (any valid token, the services check ownership), `GET /cameras` and `/notifications/**` (any valid token, the services decide).
+`/access/**` `access:read` for GET and `access:manage` for the rest). Deliberately **not** gated by a permission here, because one gateway permission cannot express them or the service decides on ownership and sites; each is an explicit
+`AUTHENTICATED` rule (any valid token): `GET /files/evidence/*/url` (owner of the fine, or staff with `file:view`), `POST /zones/check-overlap` (service accepts `mapping:view`, `zone:write` or `spot:write`,
+ahead of the zone-write rule), the map reads drivers need (`GET` and `HEAD` of `mapping/zones/*/spots`, `mapping/zones/*/geojson`, `mapping/spots/*`, `mapping/sites/*/spots[/geojson]`, `zones`, `zones/nearest`, `zones/*/rules`, `sites`, `sites/*`, `sites/*/spots[/geojson]`, `sites/*/rules`),
+the rest of `/fines/**` (incl. `GET fines/*/explanation` and `GET`/`POST fines/*/dispute`, which drivers use for their own fines; rule-service answers 404 for fines the caller may not see), `/users/**` incl. `/users/me/plates`,
+`GET /cameras` and `GET cameras/*` (camera status, the service wants `camera:admin` or `stream:operator`), `GET sessions/plate/*` and `GET sessions/*` (one session), `GET sessions/*/events`, `GET violations/plate/*` (a driver's own plates or `violation:read`),
+`GET events/stream/driver`, the `payments` calls above and `/notifications/**`.
+
+**Deny by default.** `SecurityConfig` ends with `denyAll()`: a request no rule matches is refused whether a route exists for it or not (401 without a token, `application/problem+json` 403 with one), so an endpoint a service adds is
+unreachable through the gateway until a rule lists it (the same goes for a method a rule does not list, e.g. `GET sessions/*/end`). `/internal/**` has neither a route nor a rule and must never get one; `/actuator/**` is denied
+except health, info and the key-protected `prometheus`.
 `permission` is only valid with `access: PERMISSION` and must be in the catalogue (`Permissions`, mirrors
 `smart-parking-e2e/contracts/permissions.json`): a misspelt or unknown name **fails the startup** instead of guarding nothing.
 
@@ -77,9 +84,9 @@ Claims (written by the Supabase access-token hook, ADR 0002):
 * `app_metadata.role` (`admin` \| `operator` \| `driver`) becomes `ROLE_*`; ADMIN implies OPERATOR.
 * `app_metadata.permissions` (string[]) becomes one authority per entry, named exactly like the permission. Names are matched exactly (no prefix, case folding or wildcards).
 * Nothing else is read: the token carries no `sites` and no `plates` claim (ADR 0011), so the gateway has no site or plate scope and makes no site or plate lookup of its own.
-* `parkview.security.legacy-role-fallback` (`LEGACY_ROLE_FALLBACK`, default `true`): a token **without** a `permissions` claim gets the default permissions of its role
-  (`defaultsByRole` in the contract), so tokens minted before the rollout keep working. A token that has the claim, even `[]`, is never supplemented:
-  an admin whose permissions were all revoked has none. Set it to `false` once all tokens carry the claim.
+* `parkview.security.legacy-role-fallback` (`LEGACY_ROLE_FALLBACK`, default `false`): the token hook always writes the `permissions` claim, so a token **without** it is authorised for nothing that needs a
+  permission, whatever its role (a `role=admin` token without the claim must not hold everything). Set it to `true` and such a token gets the default permissions of its role (`defaultsByRole` in the contract), a
+  rollout aid for tokens minted before permissions existed. A token that has the claim, even `[]`, is never supplemented: an admin whose permissions were all revoked has none.
 
 ## Security behaviour worth knowing
 
@@ -120,7 +127,7 @@ header). Logs stay English. The reactive chain has no MVC locale resolver: `Requ
 | `FRONTEND_URL` | `http://localhost:5173` | CORS origin(s) |
 | `REDIS_HOST` / `REDIS_PORT` | `localhost` / `6379` | rate limiter (fails open when Redis is down) |
 | `*_SERVICE_URL` etc. | `http://localhost:<port>` | downstream base URLs: `AUTH_SERVICE_URL`, `RULE_ENGINE_URL`, `SESSION_SERVICE_URL`, `PARKING_MAPPING_URL`, `EVENT_STREAMING_URL`, `INGESTION_SERVICE_URL`, `FILE_SERVICE_URL`, `NOTIFICATION_SERVICE_URL`, `LOOKUP_SERVICE_URL`, `PAYMENT_SERVICE_URL`, `AI_SERVICE_URL` |
-| `LEGACY_ROLE_FALLBACK` | `true` | derive permissions from the role for tokens without `app_metadata.permissions` (`parkview.security.legacy-role-fallback`) |
+| `LEGACY_ROLE_FALLBACK` | `false` | `true` derives permissions from the role for tokens without `app_metadata.permissions` (`parkview.security.legacy-role-fallback`) |
 | `DOCS_ENABLED` | `false` | aggregated Swagger UI at `/swagger-ui.html` (each service must have `DOCS_ENABLED=true` too). Never in production |
 
 ## Tracing
@@ -155,7 +162,7 @@ mvn -B -ntp verify            # needs JDK 24 and Docker (Testcontainers starts R
 docker build -t api-gateway .
 ```
 
-`AuthorizationMatrixTest` runs the real rules and converter on a mock server (no sockets, no Docker) and covers permission-only tokens, the role fallback and the fail-closed cases.
+`AuthorizationMatrixTest` runs the real rules and converter on a mock server (no sockets, no Docker) and covers permission-only tokens, the role fallback being off by default, the explicit `AUTHENTICATED` rules and the deny-by-default cases (unlisted paths, unrouted paths, `/internal/**`).
 Integration tests start the real gateway, use a MockWebServer as every downstream service and serve a JWKS
 for genuine ES256 token validation. On a machine where Netty cannot open selectors (some Windows setups report
 "Unable to establish loopback connection") run them in a container next to a Redis container:
