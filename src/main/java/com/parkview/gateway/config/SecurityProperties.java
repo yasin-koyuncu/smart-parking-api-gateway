@@ -13,9 +13,10 @@ import org.springframework.validation.annotation.Validated;
  * @param audience       required {@code aud} claim
  * @param internalApiKey key that protects this gateway's own {@code /actuator/prometheus} (the AI route uses {@code AI_DETECTION_INTERNAL_API_KEY} instead);
  *                       blank disables those features
- * @param legacyRoleFallback while true, a token without {@code app_metadata.permissions} gets the default
- *                       permissions of its role (rollout of ADR 0002); a token that has the claim, even
- *                       empty, is never supplemented
+ * @param legacyRoleFallback off by default. While true, a token without {@code app_metadata.permissions} gets the
+ *                       default permissions of its role (rollout of ADR 0002); a token that has the claim, even
+ *                       empty, is never supplemented. The token hook always writes the claim, so a token without it
+ *                       is authorised for nothing that needs a permission
  */
 @Validated
 @ConfigurationProperties("parkview.security")
@@ -24,7 +25,7 @@ public record SecurityProperties(
         String jwksUri,
         @DefaultValue("authenticated") String audience,
         String internalApiKey,
-        @DefaultValue("true") boolean legacyRoleFallback) {
+        @DefaultValue("false") boolean legacyRoleFallback) {
 
     public String resolvedJwksUri() {
         return jwksUri == null || jwksUri.isBlank() ? issuer + "/.well-known/jwks.json" : jwksUri;

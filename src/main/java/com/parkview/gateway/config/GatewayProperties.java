@@ -15,7 +15,8 @@ import java.util.Map;
  * Gateway behaviour that is configured rather than coded ({@code parkview.gateway.*}).
  *
  * @param rules          ordered authorisation rules; the first matching rule wins and
- *                       anything unmatched requires an authenticated user. The services enforce
+ *                       anything unmatched is denied (a path open to every signed-in user needs an explicit
+ *                       {@code AUTHENTICATED} rule). The services enforce
  *                       roles and object ownership again (defence in depth); these rules keep
  *                       obviously unauthorised traffic away from them.
  * @param allowedOrigins browser origins allowed by CORS (the frontend)

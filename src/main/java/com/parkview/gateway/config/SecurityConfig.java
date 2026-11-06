@@ -30,7 +30,7 @@ import java.security.MessageDigest;
 /**
  * Edge security: answer CORS before authorisation, write the security headers and error bodies, validate the JWT
  * (decoder: {@link JwtDecoderConfig}) and apply the declarative rules from {@code parkview.gateway.rules}
- * ({@link RuleAuthorizer}).
+ * ({@link RuleAuthorizer}); a request no rule matches is denied.
  * Authorities: roles ADMIN (implies OPERATOR), OPERATOR, DRIVER from {@code app_metadata.role} and one authority per
  * entry of {@code app_metadata.permissions} (see {@link ParkviewJwtConverter}); rules use either.
  */
@@ -72,7 +72,9 @@ public class SecurityConfig {
             }
 
             RuleAuthorizer.apply(ex, gateway.rules());
-            ex.anyExchange().authenticated();
+            // deny by default: a path no rule lists is refused (401 without a token, problem+json 403 with one), whether a route
+            // exists for it or not. "Any valid token" is an explicit `access: AUTHENTICATED` rule, never the fallthrough.
+            ex.anyExchange().denyAll();
         });
         return http.build();
     }
