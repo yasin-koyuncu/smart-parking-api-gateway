@@ -347,6 +347,10 @@ parkview:
       # access management: any signed-in user may read their own effective access, the rest is permission-gated
       - { paths: ["/api/v1/access/me/**"], methods: [GET], access: AUTHENTICATED }
       - { paths: ["/api/v1/access/**"], methods: [GET, HEAD], access: PERMISSION, permission: "access:read" }
+      # roles (ADR 0016): defining roles and their permissions is its own permission, so the right to hand out roles (access:manage, below)
+      # is not the right to create one. Reads of roles stay under access:read above.
+      - { paths: ["/api/v1/access/roles", "/api/v1/access/roles/**"], access: PERMISSION, permission: "role:manage" }     # every other method
+      # assigning roles and sites to a user (PUT /access/users/*/roles, /sites) and anything else under /access: access:manage
       - { paths: ["/api/v1/access/**"], access: PERMISSION, permission: "access:manage" }     # every other method
       # fines (drivers read their own, staff by site/zone/plate) and the profile of the signed-in user (the service uses the token
       # subject): any valid token here (explicit AUTHENTICATED rules), the services decide on ownership and sites
@@ -359,7 +363,9 @@ parkview:
       - { paths: ["/api/v1/fines/*/explanation"], methods: [GET], access: AUTHENTICATED }
       - { paths: ["/api/v1/fines/*/dispute"], methods: [GET, POST], access: AUTHENTICATED }
       - { paths: ["/api/v1/disputes/*/withdraw"], methods: [POST], access: AUTHENTICATED }
-      # the review queue and the decision of a dispute: fine:manage (rule-service also limits it to the operator's sites, which it looks up)
+      # the review queue and a dispute (reads): fine:read; the decision and everything else that changes a dispute: fine:manage
+      # (rule-service also limits both to the operator's sites, which it looks up). Reads first: the manage rule takes every other method.
+      - { paths: ["/api/v1/disputes", "/api/v1/disputes/**"], methods: [GET, HEAD], access: PERMISSION, permission: "fine:read" }
       - { paths: ["/api/v1/disputes", "/api/v1/disputes/**"], access: PERMISSION, permission: "fine:manage" }
       - { paths: ["/api/v1/fines/**"], access: AUTHENTICATED }
       - { paths: ["/api/v1/users/**"], access: AUTHENTICATED }     # incl. GET/POST /users/me/plates and DELETE /users/me/plates/*
@@ -372,11 +378,13 @@ parkview:
       # operator functions: one permission each (ADR 0002). A token without a permissions claim holds none of them
       # (parkview.security.legacy-role-fallback is off by default).
       - { paths: ["/api/v1/ai/**"], access: PERMISSION, permission: "ai:use" }
+      # the signed URL of a stored detection or fine image is a read (camera:read); everything else under cameras/admin (rotate-key, ...) is camera:admin
+      - { paths: ["/api/v1/cameras/admin/**"], methods: [GET, HEAD], access: PERMISSION, permission: "camera:read" }
       - { paths: ["/api/v1/cameras/admin/**"], access: PERMISSION, permission: "camera:admin" }
-      # camera list: ingestion-service wants camera:admin OR stream:operator with site scope, which one gateway permission cannot say: the service decides.
+      # camera list: ingestion-service wants camera:read OR stream:operator with site scope, which one gateway permission cannot say: the service decides.
       # Exact path only (the PUBLIC device rules above and the admin rule stay first; `*` is one segment, so none of these capture each other)
       - { paths: ["/api/v1/cameras"], methods: [GET], access: AUTHENTICATED }
-      # status of one RTSP camera: camera:admin or stream:operator plus site scope, again the service decides (after the admin rule: a camera id `admin` has none)
+      # status of one RTSP camera: camera:read or stream:operator plus site scope, again the service decides (after the admin rule: a camera id `admin` has none)
       - { paths: ["/api/v1/cameras/*"], methods: [GET], access: AUTHENTICATED }
       - { paths: ["/api/v1/cameras/*/capture"], methods: [POST], access: PERMISSION, permission: "ai:use" }
       # scanning a view needs camera:admin AND ai:use: a rule names one permission, so the edge asks for camera:admin and ingestion-service
@@ -387,7 +395,9 @@ parkview:
       - { paths: ["/api/v1/detections/*/review"], methods: [PATCH], access: PERMISSION, permission: "violation:resolve" }
       - { paths: ["/api/v1/detections", "/api/v1/detections/**"], methods: [GET, HEAD], access: PERMISSION, permission: "violation:read" }
       - { paths: ["/api/v1/lookup/**"], access: PERMISSION, permission: "lookup:vehicle" }
-      - { paths: ["/api/v1/permits/**"], access: PERMISSION, permission: "permit:manage" }
+      # permits: reads (list, one permit) permit:read, grant and revoke permit:manage (every other method)
+      - { paths: ["/api/v1/permits", "/api/v1/permits/**"], methods: [GET, HEAD], access: PERMISSION, permission: "permit:read" }
+      - { paths: ["/api/v1/permits", "/api/v1/permits/**"], access: PERMISSION, permission: "permit:manage" }
       - { paths: ["/api/v1/sessions/zone/**", "/api/v1/sessions/site/**"], access: PERMISSION, permission: "session:read" }
       - { paths: ["/api/v1/sessions/start"], access: PERMISSION, permission: "session:manage" }
       - { paths: ["/api/v1/sessions/*/pay"], methods: [PATCH], access: PERMISSION, permission: "session:manage" }
@@ -408,18 +418,24 @@ parkview:
       - { paths: ["/api/v1/events/status", "/api/v1/events/stream/operator"], access: PERMISSION, permission: "stream:operator" }
       # the driver stream: any valid token, event-streaming checks that the plates asked for are the driver's own
       - { paths: ["/api/v1/events/stream/driver"], methods: [GET], access: AUTHENTICATED }
-      # map history is for operators; every other mapping GET (zones, sites, spots, geojson) is read by drivers and stays open. The overlap check
-      # (POST /zones/check-overlap) accepts mapping:view, zone:write or spot:write: the service decides. Map versions are per site (ADR 0009);
-      # the site routes are listed under /mapping/sites and, should mapping-service serve them under /sites, there too.
+      # two audiences (ADR 0017): the public catalogue (zones, sites, their spots, geojson and rules under /zones, /sites and the /mapping twins
+      # of the spot reads, AUTHENTICATED further down) is read by every signed-in user; the management reads under /mapping need a permission.
+      # zone:read: sites and zones as a place manager sees them (+ site scope in mapping-service). `*` is one segment, so these do not capture
+      # /mapping/sites/*/spots, /areas, /rules ... below. spot:read: map history, areas and camera views.
+      # The overlap check (POST /zones/check-overlap) accepts zone:read, spot:read, zone:write or spot:write: the service decides.
+      # Map versions are per site (ADR 0009); the site routes are listed under /mapping/sites and, should mapping-service serve them under /sites, there too.
+      - { paths: ["/api/v1/mapping/sites", "/api/v1/mapping/sites/*", "/api/v1/mapping/zones", "/api/v1/mapping/zones/*"],
+          methods: [GET, HEAD], access: PERMISSION, permission: "zone:read" }
       - { paths: ["/api/v1/mapping/zones/*/versions", "/api/v1/mapping/zones/*/changes", "/api/v1/mapping/spots/*/changes",
                   "/api/v1/mapping/sites/*/versions", "/api/v1/mapping/sites/*/changes", "/api/v1/sites/*/versions", "/api/v1/sites/*/changes"],
-          methods: [GET, HEAD], access: PERMISSION, permission: "mapping:view" }
-      # parking areas and camera views (with their pictures and calibration) are for staff: reads need mapping:view, their writes fall under the
+          methods: [GET, HEAD], access: PERMISSION, permission: "spot:read" }
+      # parking areas and camera views (with their pictures and calibration) are for staff: reads need spot:read, their writes fall under the
       # spot:write rule for /mapping/** below
       - { paths: ["/api/v1/mapping/areas", "/api/v1/mapping/areas/**", "/api/v1/mapping/views/**", "/api/v1/mapping/cameras/*/views",
-                  "/api/v1/mapping/sites/*/areas", "/api/v1/sites/*/areas"], methods: [GET, HEAD], access: PERMISSION, permission: "mapping:view" }
+                  "/api/v1/mapping/sites/*/areas", "/api/v1/sites/*/areas"], methods: [GET, HEAD], access: PERMISSION, permission: "spot:read" }
       # site rules (zone_rules with zone_id null, ADR 0009) are written like zone rules (POST/PUT/DELETE /zones/{zoneId}/rules/**: zone:write).
-      # Before the spot:write catch-all of /mapping/**; under /sites/** the zone:write rule at the end covers them. Reads stay open like zone rules.
+      # Before the spot:write catch-all of /mapping/**; under /sites/** the zone:write rule at the end covers them. Reads of the rules of a zone or
+      # a site are open to every signed-in user (they are the information on the parking sign; see the AUTHENTICATED list below).
       - { paths: ["/api/v1/mapping/sites/*/rules", "/api/v1/mapping/sites/*/rules/**"], methods: [POST, PUT, PATCH, DELETE], access: PERMISSION, permission: "zone:write" }
       # spots, areas, calibration imports and rollback of a site are map edits like those of a zone (/mapping/zones/{zoneId}/...: spot:write).
       # Under /mapping/** the catch-all below says so; under /sites/** they must come before the zone:write rule of the site itself.
@@ -430,14 +446,15 @@ parkview:
       - { paths: ["/api/v1/files/snapshots/**"], methods: [GET, HEAD], access: PERMISSION, permission: "file:view" }
       - { paths: ["/api/v1/files/evidence/*/url"], methods: [GET], access: AUTHENTICATED }
       - { paths: ["/api/v1/mapping/**"], methods: [POST, PUT, PATCH, DELETE], access: PERMISSION, permission: "spot:write" }
-      # what drivers read on the map (zones, sites, their spots, geojson and rules): any valid token, an explicit list instead of a catch-all.
-      # Listed after the staff reads above (versions, changes, areas, views), which stay mapping:view. Other GETs under /mapping, /zones and /sites are denied.
+      # what drivers read on the map (zones, sites, their spots, geojson and the rules of a zone or a site, no permission and no site scope): any
+      # valid token, an explicit list instead of a catch-all.
+      # Listed after the staff reads above (versions, changes, areas, views), which need spot:read. Other GETs under /mapping, /zones and /sites are denied.
       - { paths: ["/api/v1/mapping/zones/*/spots", "/api/v1/mapping/zones/*/geojson", "/api/v1/mapping/spots/*",
                   "/api/v1/mapping/sites/*/spots", "/api/v1/mapping/sites/*/spots/geojson",
                   "/api/v1/zones", "/api/v1/zones/nearest", "/api/v1/zones/*/rules",
                   "/api/v1/sites", "/api/v1/sites/*", "/api/v1/sites/*/spots", "/api/v1/sites/*/spots/geojson", "/api/v1/sites/*/rules"],
           methods: [GET, HEAD], access: AUTHENTICATED }
-      # the overlap check is a read in disguise: the service accepts mapping:view, zone:write or spot:write (a single gateway permission cannot say "any of")
+      # the overlap check is a read in disguise: the service accepts zone:read, spot:read, zone:write or spot:write (a single gateway permission cannot say "any of")
       - { paths: ["/api/v1/zones/check-overlap"], methods: [POST], access: AUTHENTICATED }
       # zone geometry drives billing: its own permission (admin only by default)
       - { paths: ["/api/v1/zones", "/api/v1/zones/**"], methods: [POST, PUT, PATCH, DELETE], access: PERMISSION, permission: "zone:write" }
