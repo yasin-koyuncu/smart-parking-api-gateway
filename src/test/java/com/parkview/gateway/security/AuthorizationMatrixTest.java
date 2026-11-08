@@ -37,7 +37,10 @@ class AuthorizationMatrixTest {
     static Stream<Guarded> guarded() {
         return Stream.of(
                 new Guarded(HttpMethod.POST, "/api/v1/ai/anpr/read", "ai:use"),
-                new Guarded(HttpMethod.GET, "/api/v1/cameras/admin/snapshot-url", "camera:admin"),
+                // reads of cameras: camera:read; the administration under cameras/admin stays camera:admin
+                new Guarded(HttpMethod.GET, "/api/v1/cameras/admin/snapshot-url", "camera:read"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/cameras/admin/snapshot-url", "camera:read"),
+                new Guarded(HttpMethod.POST, "/api/v1/cameras/admin/rotate-key", "camera:admin"),
                 new Guarded(HttpMethod.POST, "/api/v1/cameras/c1/capture", "ai:use"),
                 new Guarded(HttpMethod.POST, "/api/v1/cameras/c1/calibration/scan", "camera:admin"),
                 new Guarded(HttpMethod.GET, "/api/v1/cameras/c1/ptz/presets", "camera:admin"),
@@ -45,7 +48,12 @@ class AuthorizationMatrixTest {
                 new Guarded(HttpMethod.GET, "/api/v1/detections/d1", "violation:read"),
                 new Guarded(HttpMethod.PATCH, "/api/v1/detections/d1/review", "violation:resolve"),
                 new Guarded(HttpMethod.GET, "/api/v1/lookup/plate/ABC123", "lookup:vehicle"),
+                // permits: reads permit:read, grant and revoke permit:manage
+                new Guarded(HttpMethod.GET, "/api/v1/permits", "permit:read"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/permits", "permit:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/permits/1", "permit:read"),
                 new Guarded(HttpMethod.POST, "/api/v1/permits", "permit:manage"),
+                new Guarded(HttpMethod.PUT, "/api/v1/permits/1", "permit:manage"),
                 new Guarded(HttpMethod.DELETE, "/api/v1/permits/1", "permit:manage"),
                 new Guarded(HttpMethod.GET, "/api/v1/sessions/zone/z1", "session:read"),
                 new Guarded(HttpMethod.GET, "/api/v1/sessions/site/s1", "session:read"),
@@ -62,32 +70,44 @@ class AuthorizationMatrixTest {
                 new Guarded(HttpMethod.POST, "/api/v1/fines/f1/mark-paid", "fine:manage"),
                 new Guarded(HttpMethod.GET, "/api/v1/fines/f1/history", "violation:read"),
                 new Guarded(HttpMethod.GET, "/api/v1/fines/f1/evidence", "violation:read"),
-                new Guarded(HttpMethod.GET, "/api/v1/disputes", "fine:manage"),
-                new Guarded(HttpMethod.GET, "/api/v1/disputes/d1", "fine:manage"),
+                // disputes: reads fine:read, the decision (and every other change) fine:manage
+                new Guarded(HttpMethod.GET, "/api/v1/disputes", "fine:read"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/disputes", "fine:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/disputes/d1", "fine:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/disputes/d1/history", "fine:read"),
                 new Guarded(HttpMethod.POST, "/api/v1/disputes/d1/decision", "fine:manage"),
                 new Guarded(HttpMethod.PATCH, "/api/v1/violations/7/resolve", "violation:resolve"),
                 new Guarded(HttpMethod.GET, "/api/v1/events/status", "stream:operator"),
                 new Guarded(HttpMethod.GET, "/api/v1/events/stream/operator", "stream:operator"),
-                new Guarded(HttpMethod.GET, "/api/v1/mapping/zones/z1/versions", "mapping:view"),
-                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/zones/z1/versions", "mapping:view"),
-                new Guarded(HttpMethod.GET, "/api/v1/mapping/zones/z1/changes", "mapping:view"),
-                new Guarded(HttpMethod.GET, "/api/v1/mapping/sites/s1/versions", "mapping:view"),
-                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/sites/s1/versions", "mapping:view"),
-                new Guarded(HttpMethod.GET, "/api/v1/mapping/sites/s1/changes", "mapping:view"),
-                new Guarded(HttpMethod.GET, "/api/v1/sites/s1/versions", "mapping:view"),
-                new Guarded(HttpMethod.GET, "/api/v1/sites/s1/changes", "mapping:view"),
-                new Guarded(HttpMethod.GET, "/api/v1/mapping/sites/s1/areas", "mapping:view"),
-                new Guarded(HttpMethod.GET, "/api/v1/sites/s1/areas", "mapping:view"),
-                new Guarded(HttpMethod.GET, "/api/v1/mapping/spots/s1/changes", "mapping:view"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/zones/z1/versions", "spot:read"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/zones/z1/versions", "spot:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/zones/z1/changes", "spot:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/sites/s1/versions", "spot:read"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/sites/s1/versions", "spot:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/sites/s1/changes", "spot:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/sites/s1/versions", "spot:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/sites/s1/changes", "spot:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/sites/s1/areas", "spot:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/sites/s1/areas", "spot:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/spots/s1/changes", "spot:read"),
+                // place management reads (ADR 0017): sites and zones as an operator manages them, apart from the public catalogue
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/sites", "zone:read"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/sites", "zone:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/sites/s1", "zone:read"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/sites/s1", "zone:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/zones", "zone:read"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/zones", "zone:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/zones/z1", "zone:read"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/zones/z1", "zone:read"),
                 new Guarded(HttpMethod.POST, "/api/v1/files/evidence/f1", "file:upload"),
                 new Guarded(HttpMethod.POST, "/api/v1/files/snapshots/c1", "file:upload"),
                 new Guarded(HttpMethod.GET, "/api/v1/files/snapshots/url", "file:view"),
-                new Guarded(HttpMethod.GET, "/api/v1/mapping/areas", "mapping:view"),
-                new Guarded(HttpMethod.GET, "/api/v1/mapping/areas/a1", "mapping:view"),
-                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/areas/a1", "mapping:view"),
-                new Guarded(HttpMethod.GET, "/api/v1/mapping/views/v1", "mapping:view"),
-                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/views/v1", "mapping:view"),
-                new Guarded(HttpMethod.GET, "/api/v1/mapping/cameras/c1/views", "mapping:view"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/areas", "spot:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/areas/a1", "spot:read"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/areas/a1", "spot:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/views/v1", "spot:read"),
+                new Guarded(HttpMethod.HEAD, "/api/v1/mapping/views/v1", "spot:read"),
+                new Guarded(HttpMethod.GET, "/api/v1/mapping/cameras/c1/views", "spot:read"),
                 new Guarded(HttpMethod.POST, "/api/v1/mapping/areas", "spot:write"),
                 new Guarded(HttpMethod.PUT, "/api/v1/mapping/areas/a1", "spot:write"),
                 new Guarded(HttpMethod.DELETE, "/api/v1/mapping/areas/a1", "spot:write"),
@@ -128,10 +148,14 @@ class AuthorizationMatrixTest {
                 new Guarded(HttpMethod.GET, "/api/v1/access/roles", "access:read"),
                 new Guarded(HttpMethod.GET, "/api/v1/access/users/u1/audit", "access:read"),
                 new Guarded(HttpMethod.HEAD, "/api/v1/access/roles", "access:read"),
-                new Guarded(HttpMethod.POST, "/api/v1/access/roles", "access:manage"),
+                new Guarded(HttpMethod.GET, "/api/v1/access/roles/r1", "access:read"),
+                // defining roles is role:manage (ADR 0016), handing them out to a user stays access:manage
+                new Guarded(HttpMethod.POST, "/api/v1/access/roles", "role:manage"),
+                new Guarded(HttpMethod.PUT, "/api/v1/access/roles/r1", "role:manage"),
+                new Guarded(HttpMethod.PATCH, "/api/v1/access/roles/r1", "role:manage"),
+                new Guarded(HttpMethod.DELETE, "/api/v1/access/roles/r1", "role:manage"),
                 new Guarded(HttpMethod.PUT, "/api/v1/access/users/u1/roles", "access:manage"),
-                new Guarded(HttpMethod.PUT, "/api/v1/access/users/u1/sites", "access:manage"),
-                new Guarded(HttpMethod.DELETE, "/api/v1/access/roles/r1", "access:manage"));
+                new Guarded(HttpMethod.PUT, "/api/v1/access/users/u1/sites", "access:manage"));
     }
 
     @Autowired
@@ -252,6 +276,30 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.POST, "/api/v1/access/roles", reader)).isEqualTo(403);
     }
 
+    @Test
+    void roleManagementAndAssigningRolesAreSeparatePermissions() {
+        Map<String, Object> roleManager = permissionsOnly(Set.of("role:manage"));
+        Map<String, Object> accessManager = permissionsOnly(Set.of("access:manage", "access:read"));
+        // role:manage defines roles but neither reads them nor assigns them to users
+        assertThat(status(HttpMethod.POST, "/api/v1/access/roles", roleManager)).isEqualTo(200);
+        assertThat(status(HttpMethod.PUT, "/api/v1/access/roles/r1", roleManager)).isEqualTo(200);
+        assertThat(status(HttpMethod.DELETE, "/api/v1/access/roles/r1", roleManager)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/access/roles", roleManager)).isEqualTo(403);
+        assertThat(status(HttpMethod.PUT, "/api/v1/access/users/u1/roles", roleManager)).isEqualTo(403);
+        assertThat(status(HttpMethod.PUT, "/api/v1/access/users/u1/sites", roleManager)).isEqualTo(403);
+        // access:manage assigns roles and sites, but cannot create, change or delete a role
+        assertThat(status(HttpMethod.PUT, "/api/v1/access/users/u1/roles", accessManager)).isEqualTo(200);
+        assertThat(status(HttpMethod.PUT, "/api/v1/access/users/u1/sites", accessManager)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/access/roles", accessManager)).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/access/roles", accessManager)).isEqualTo(403);
+        assertThat(status(HttpMethod.PUT, "/api/v1/access/roles/r1", accessManager)).isEqualTo(403);
+        assertThat(status(HttpMethod.PATCH, "/api/v1/access/roles/r1", accessManager)).isEqualTo(403);
+        assertThat(status(HttpMethod.DELETE, "/api/v1/access/roles/r1", accessManager)).isEqualTo(403);
+        // other non-GET calls under /access stay access:manage
+        assertThat(status(HttpMethod.POST, "/api/v1/access/other", accessManager)).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/access/other", roleManager)).isEqualTo(403);
+    }
+
     // ── role defaults (the permissions claim a token carries) and the legacy role fallback (off by default) ──
 
     @Test
@@ -266,14 +314,23 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.PATCH, "/api/v1/sessions/7", operator)).isEqualTo(403);
         assertThat(status(HttpMethod.POST, "/api/v1/fines/f1/void", operator)).isEqualTo(403);
         assertThat(status(HttpMethod.POST, "/api/v1/fines/f1/mark-paid", operator)).isEqualTo(403);
-        assertThat(status(HttpMethod.GET, "/api/v1/disputes", operator)).isEqualTo(403);
+        // the operator reads disputes, cameras and permits (fine:read, camera:read, permit:read) and manages permits and cameras, but decides no dispute
+        assertThat(status(HttpMethod.GET, "/api/v1/disputes", operator)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/disputes/d1", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/disputes/d1/decision", operator)).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/permits", operator)).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/permits", operator)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/admin/snapshot-url", operator)).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/admin/rotate-key", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/sessions/search", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/history", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/evidence", operator)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/zones", operator)).isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/access/roles", operator)).isEqualTo(403);
         assertThat(status(HttpMethod.POST, "/api/v1/access/roles", operator)).isEqualTo(403);
+        // the operator reads sites and zones of the places it manages (zone:read) but a driver does not
+        assertThat(status(HttpMethod.GET, "/api/v1/mapping/sites", operator)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/mapping/zones/z1", operator)).isEqualTo(200);
 
         Map<String, Object> admin = defaults("admin");
         assertThat(status(HttpMethod.POST, "/api/v1/sessions/7/void", admin)).isEqualTo(200);
@@ -326,6 +383,8 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.POST, "/api/v1/files/evidence/f1", driver)).isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/files/snapshots/url", driver)).isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/mapping/zones/z1/versions", driver)).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/mapping/sites", driver)).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/mapping/zones", driver)).isEqualTo(403);
     }
 
     @Test
@@ -338,16 +397,16 @@ class AuthorizationMatrixTest {
                 "/api/v1/sites", "/api/v1/sites/s1", "/api/v1/sites/s1/spots", "/api/v1/sites/s1/spots/geojson", "/api/v1/sites/s1/rules")) {
             assertThat(status(HttpMethod.GET, path, driver)).as(path).isEqualTo(200);
         }
-        // mapping:view or spot:write alone must get through the gateway (the service accepts either), without zone:write
-        for (String permission : List.of("mapping:view", "spot:write", "zone:write")) {
+        // a read or write permission of zones or spots alone must get through the gateway (the service accepts any), without zone:write
+        for (String permission : List.of("zone:read", "spot:read", "spot:write", "zone:write")) {
             assertThat(status(HttpMethod.POST, "/api/v1/zones/check-overlap", permissionsOnly(Set.of(permission)))).as(permission).isEqualTo(200);
         }
         assertThat(status(HttpMethod.POST, "/api/v1/zones/check-overlap", null)).isEqualTo(401);
         // the rest of the zone writes are unchanged
-        assertThat(status(HttpMethod.POST, "/api/v1/zones", permissionsOnly(Set.of("mapping:view", "spot:write")))).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/zones", permissionsOnly(Set.of("zone:read", "spot:read", "spot:write")))).isEqualTo(403);
     }
 
-    // ── disputes: the driver side needs only a token, the review queue needs fine:manage ──
+    // ── disputes: the driver side needs only a token, the review queue fine:read, the decision fine:manage ──
 
     @Test
     void theDriverSideOfADisputeNeedsOnlyAValidTokenAndTheServiceDecidesOnOwnership() {
@@ -371,9 +430,17 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.GET, "/api/v1/disputes?status=all", driver)).isEqualTo(403);
         assertThat(status(HttpMethod.POST, "/api/v1/disputes/d1/decision", driver)).isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/evidence", driver)).isEqualTo(403);
-        // fine:manage opens the queue but not the evidence (violation:read), and the other way round
+        // fine:read opens the queue but not the evidence (violation:read) and not the decision, and the other way round
+        Map<String, Object> caseReader = permissionsOnly(Set.of("fine:read"));
+        assertThat(status(HttpMethod.GET, "/api/v1/disputes", caseReader)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/disputes?status=all", caseReader)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/disputes/d1", caseReader)).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/disputes/d1/decision", caseReader)).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/evidence", caseReader)).isEqualTo(403);
+        // fine:manage is the write permission only: it decides, but it does not read the queue (it does not imply fine:read)
         Map<String, Object> manager = permissionsOnly(Set.of("fine:manage"));
-        assertThat(status(HttpMethod.GET, "/api/v1/disputes", manager)).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/disputes/d1/decision", manager)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/disputes", manager)).isEqualTo(403);
         assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/evidence", manager)).isEqualTo(403);
         Map<String, Object> reader = permissionsOnly(Set.of("violation:read"));
         assertThat(status(HttpMethod.GET, "/api/v1/fines/f1/evidence", reader)).isEqualTo(200);
@@ -397,12 +464,51 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.PUT, "/api/v1/users/me", null)).isEqualTo(401);
     }
 
+    // ── permits: reads and writes apart ─────────────────────────────────────────
+
+    @Test
+    void permitReadsAndWritesNeedTheirOwnPermission() {
+        Map<String, Object> reader = permissionsOnly(Set.of("permit:read"));
+        Map<String, Object> manager = permissionsOnly(Set.of("permit:manage"));
+        assertThat(status(HttpMethod.GET, "/api/v1/permits", null)).isEqualTo(401);
+        assertThat(status(HttpMethod.GET, "/api/v1/permits?page=0&size=20", reader)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/permits/1", reader)).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/permits", reader)).isEqualTo(403);
+        assertThat(status(HttpMethod.DELETE, "/api/v1/permits/1", reader)).isEqualTo(403);
+        // permit:manage is the write permission only: it does not read the list
+        assertThat(status(HttpMethod.POST, "/api/v1/permits", manager)).isEqualTo(200);
+        assertThat(status(HttpMethod.DELETE, "/api/v1/permits/1", manager)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/permits", manager)).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/permits", Map.of("role", "driver"))).isEqualTo(403);
+    }
+
     // ── cameras, detections, notifications, own plates ──────────────────────────
+
+    @Test
+    void cameraReadsNeedCameraReadAndTheAdministrationNeedsCameraAdmin() {
+        Map<String, Object> reader = permissionsOnly(Set.of("camera:read"));
+        Map<String, Object> admin = permissionsOnly(Set.of("camera:admin"));
+        // the signed URL of a stored image is a read
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/admin/snapshot-url", reader)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/admin/snapshot-url", admin)).as("camera:admin does not imply camera:read").isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/admin/snapshot-url", null)).isEqualTo(401);
+        // rotating a key is administration: camera:read is not enough, and neither is it for scans and presets
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/admin/rotate-key", reader)).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/admin/rotate-key", admin)).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/calibration/scan", reader)).isEqualTo(403);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/ptz/presets", reader)).isEqualTo(403);
+        // the list and the status of a camera are left to the service (camera:read or stream:operator with site scope): a valid token passes the edge
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras", reader)).isEqualTo(200);
+        assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1", reader)).isEqualTo(200);
+        // writes on the list path and on a camera are not open (only the device endpoints are)
+        assertThat(status(HttpMethod.POST, "/api/v1/cameras", reader)).isEqualTo(403);
+        assertThat(status(HttpMethod.DELETE, "/api/v1/cameras/c1", admin)).isEqualTo(403);
+    }
 
     @Test
     void cameraListIsLeftToTheServiceAndTheDeviceAndAdminRulesAreNotShadowed() {
         Map<String, Object> driver = Map.of("role", "driver", "permissions", List.of());
-        // GET /cameras: ingestion-service wants camera:admin OR stream:operator with zone scope, so any valid token passes the edge
+        // GET /cameras: ingestion-service wants camera:read OR stream:operator with zone scope, so any valid token passes the edge
         assertThat(status(HttpMethod.GET, "/api/v1/cameras", null)).isEqualTo(401);
         assertThat(status(HttpMethod.GET, "/api/v1/cameras", driver)).isEqualTo(200);
         assertThat(status(HttpMethod.GET, "/api/v1/cameras", permissionsOnly(Set.of("stream:operator")))).isEqualTo(200);
@@ -417,7 +523,7 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/capture", null)).isEqualTo(401);
         assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1/capture", driver)).as("capture is POST only: denied").isEqualTo(403);
         assertThat(status(HttpMethod.POST, "/api/v1/cameras/c1/x/capture", driver)).as("not a camera route: denied").isEqualTo(403);
-        // the status of one camera: any valid token, the service wants camera:admin or stream:operator
+        // the status of one camera: any valid token, the service wants camera:read or stream:operator
         assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1", null)).isEqualTo(401);
         assertThat(status(HttpMethod.GET, "/api/v1/cameras/c1", driver)).isEqualTo(200);
     }
@@ -445,13 +551,13 @@ class AuthorizationMatrixTest {
     }
 
     @Test
-    void parkingAreasAndCameraViewsAreReadWithMappingViewAndWrittenWithSpotWrite() {
-        Map<String, Object> viewer = permissionsOnly(Set.of("mapping:view"));
+    void parkingAreasAndCameraViewsAreReadWithSpotReadAndWrittenWithSpotWrite() {
+        Map<String, Object> viewer = permissionsOnly(Set.of("spot:read"));
         Map<String, Object> editor = permissionsOnly(Set.of("spot:write"));
         Map<String, Object> driver = Map.of("role", "driver", "permissions", List.of());
         for (String path : List.of("/api/v1/mapping/areas", "/api/v1/mapping/areas/a1", "/api/v1/mapping/views/v1", "/api/v1/mapping/cameras/c1/views")) {
             assertThat(status(HttpMethod.GET, path, viewer)).as(path + " viewer").isEqualTo(200);
-            assertThat(status(HttpMethod.GET, path, editor)).as(path + " editor (the service wants mapping:view to read)").isEqualTo(403);
+            assertThat(status(HttpMethod.GET, path, editor)).as(path + " editor (the service wants spot:read to read)").isEqualTo(403);
             assertThat(status(HttpMethod.GET, path, driver)).as(path + " driver").isEqualTo(403);
             assertThat(status(HttpMethod.GET, path, defaults("operator"))).as(path + " operator with the defaults").isEqualTo(200);
             assertThat(status(HttpMethod.GET, path, null)).as(path + " anonymous").isEqualTo(401);
@@ -521,7 +627,9 @@ class AuthorizationMatrixTest {
                 new Call(HttpMethod.GET, "/api/v1/sessions/7/end"), new Call(HttpMethod.GET, "/api/v1/sessions/7/pay"),
                 new Call(HttpMethod.DELETE, "/api/v1/sessions/7"), new Call(HttpMethod.GET, "/api/v1/sessions/a/b/c"),
                 new Call(HttpMethod.GET, "/api/v1/violations"), new Call(HttpMethod.POST, "/api/v1/violations/plate/ABC123"),
-                new Call(HttpMethod.GET, "/api/v1/mapping"), new Call(HttpMethod.GET, "/api/v1/mapping/zones/z1"),
+                new Call(HttpMethod.GET, "/api/v1/mapping"), new Call(HttpMethod.GET, "/api/v1/mapping/zones/z1/other"),
+                new Call(HttpMethod.GET, "/api/v1/mapping/sites/s1/other"), new Call(HttpMethod.GET, "/api/v1/mapping/zones/z1/rules"),
+                new Call(HttpMethod.GET, "/api/v1/mapping/sites/s1/x/y"),
                 new Call(HttpMethod.GET, "/api/v1/mapping/unknown"), new Call(HttpMethod.GET, "/api/v1/mapping/sites/s1/rules"),
                 new Call(HttpMethod.GET, "/api/v1/zones/z1"), new Call(HttpMethod.GET, "/api/v1/zones/z1/other"),
                 new Call(HttpMethod.GET, "/api/v1/sites/s1/other"),
@@ -593,7 +701,9 @@ class AuthorizationMatrixTest {
     void theExplicitAuthenticatedRulesDoNotShadowThePermissionRulesBeforeThem() {
         Map<String, Object> noPermissions = Map.of("role", "driver", "permissions", List.of());
         for (String path : List.of("/api/v1/sessions/search", "/api/v1/mapping/areas", "/api/v1/mapping/views/v1", "/api/v1/mapping/zones/z1/versions",
-                "/api/v1/sites/s1/versions", "/api/v1/sites/s1/areas", "/api/v1/files/snapshots/url", "/api/v1/cameras/admin/snapshot-url")) {
+                "/api/v1/sites/s1/versions", "/api/v1/sites/s1/areas", "/api/v1/files/snapshots/url", "/api/v1/cameras/admin/snapshot-url",
+                // the management reads of sites and zones are not part of the public catalogue
+                "/api/v1/mapping/sites", "/api/v1/mapping/sites/s1", "/api/v1/mapping/zones", "/api/v1/mapping/zones/z1")) {
             assertThat(status(HttpMethod.GET, path, noPermissions)).as(path).isEqualTo(403);
         }
         assertThat(status(HttpMethod.POST, "/api/v1/sites", noPermissions)).isEqualTo(403);

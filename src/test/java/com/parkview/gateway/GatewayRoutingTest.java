@@ -313,8 +313,8 @@ class GatewayRoutingTest {
     }
 
     @Test
-    void parkingAreasAndCameraViewsAreRoutedToMappingAndReadWithMappingView() throws Exception {
-        String viewer = "Bearer " + permissionToken("mv-1", "mapping:view");
+    void parkingAreasAndCameraViewsAreRoutedToMappingAndReadWithSpotRead() throws Exception {
+        String viewer = "Bearer " + permissionToken("mv-1", "spot:read");
         for (String path : List.of("/api/v1/mapping/areas", "/api/v1/mapping/areas/a1", "/api/v1/mapping/views/v1", "/api/v1/mapping/cameras/c1/views")) {
             client.get().uri(path).header("Authorization", viewer).exchange().expectStatus().isOk();
             assertThat(upstreamRequest().getPath()).isEqualTo(path);   // not rewritten: mapping-service serves /api/v1/mapping/**
@@ -327,6 +327,9 @@ class GatewayRoutingTest {
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
         client.get().uri("/api/v1/mapping/views/v1").header("Authorization", editor).exchange().expectStatus().isForbidden();
         as("driver", "d-1").get().uri("/api/v1/mapping/areas/a1").exchange().expectStatus().isForbidden();
+        // zone:read is the read permission of sites and zones, not of areas and views
+        client.get().uri("/api/v1/mapping/areas/a1").header("Authorization", "Bearer " + permissionToken("zr-1", "zone:read"))
+                .exchange().expectStatus().isForbidden();
         assertThat(RECORDED.poll(300, TimeUnit.MILLISECONDS)).as("refused calls never reach mapping-service").isNull();
     }
 
@@ -417,8 +420,15 @@ class GatewayRoutingTest {
         assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/access/roles");
         client.post().uri("/api/v1/access/roles").header("Authorization", "Bearer " + permissionToken("ad-1", "access:read"))
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
+        // defining a role is role:manage; access:manage assigns roles and sites to a user (ADR 0016)
         client.post().uri("/api/v1/access/roles").header("Authorization", "Bearer " + permissionToken("ad-1", "access:manage"))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
+        client.post().uri("/api/v1/access/roles").header("Authorization", "Bearer " + permissionToken("ad-1", "role:manage"))
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isOk();
+        client.put().uri("/api/v1/access/users/u1/roles").header("Authorization", "Bearer " + permissionToken("ad-1", "access:manage"))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isOk();
+        client.put().uri("/api/v1/access/users/u1/roles").header("Authorization", "Bearer " + permissionToken("ad-1", "role:manage"))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
         client.get().uri("/api/v1/access/me/access").header("Authorization", "Bearer " + validToken("driver", "d-1"))
                 .exchange().expectStatus().isOk();
         client.get().uri("/api/v1/access/roles").exchange().expectStatus().isUnauthorized();
@@ -495,7 +505,7 @@ class GatewayRoutingTest {
         client.get().uri("/api/v1/disputes").exchange().expectStatus().isUnauthorized();
         assertThat(RECORDED.poll(300, TimeUnit.MILLISECONDS)).as("nothing reached upstream").isNull();
 
-        String manager = "Bearer " + permissionToken("op-7", "fine:manage", "violation:read");
+        String manager = "Bearer " + permissionToken("op-7", "fine:read", "fine:manage", "violation:read");
         client.get().uri("/api/v1/disputes?status=open&zoneId=z1").header("Authorization", manager).exchange().expectStatus().isOk();
         assertThat(upstreamRequest().getPath()).isEqualTo("/api/v1/disputes?status=open&zoneId=z1");
         client.post().uri("/api/v1/disputes/d1/decision").header("Authorization", manager).contentType(MediaType.APPLICATION_JSON)
@@ -507,10 +517,14 @@ class GatewayRoutingTest {
 
     @Test
     void fileAndMapHistoryRulesNeedTheirPermissionButEvidenceUrlsStayOpenForOwners() throws Exception {
-        String viewer = "Bearer " + permissionToken("op-2", "file:view", "mapping:view");
+        String viewer = "Bearer " + permissionToken("op-2", "file:view", "spot:read");
         client.get().uri("/api/v1/files/snapshots/url?key=cameras/c1/x.jpg").header("Authorization", viewer).exchange().expectStatus().isOk();
         assertThat(upstreamRequest().getPath()).startsWith("/api/v1/files/snapshots/url");
         client.get().uri("/api/v1/mapping/zones/z1/versions").header("Authorization", viewer).exchange().expectStatus().isOk();
+        // the management read of a zone is zone:read; the public catalogue twin needs only a token
+        client.get().uri("/api/v1/mapping/zones/z1").header("Authorization", viewer).exchange().expectStatus().isForbidden();
+        client.get().uri("/api/v1/mapping/sites").header("Authorization", "Bearer " + permissionToken("zr-2", "zone:read"))
+                .exchange().expectStatus().isOk();
         client.post().uri("/api/v1/files/evidence/f1").header("Authorization", viewer)
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
         String uploader = "Bearer " + permissionToken("op-3", "file:upload");
