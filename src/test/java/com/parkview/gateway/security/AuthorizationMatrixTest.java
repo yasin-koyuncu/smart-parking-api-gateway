@@ -155,7 +155,9 @@ class AuthorizationMatrixTest {
                 new Guarded(HttpMethod.PATCH, "/api/v1/access/roles/r1", "role:manage"),
                 new Guarded(HttpMethod.DELETE, "/api/v1/access/roles/r1", "role:manage"),
                 new Guarded(HttpMethod.PUT, "/api/v1/access/users/u1/roles", "access:manage"),
-                new Guarded(HttpMethod.PUT, "/api/v1/access/users/u1/sites", "access:manage"));
+                new Guarded(HttpMethod.PUT, "/api/v1/access/users/u1/sites", "access:manage"),
+                // inviting an operator (creates the account, assigns roles and sites) is access:manage; the service adds the privileged-role rule of ADR 0016
+                new Guarded(HttpMethod.POST, "/api/v1/access/users/invite", "access:manage"));
     }
 
     @Autowired
@@ -295,6 +297,11 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.PUT, "/api/v1/access/roles/r1", accessManager)).isEqualTo(403);
         assertThat(status(HttpMethod.PATCH, "/api/v1/access/roles/r1", accessManager)).isEqualTo(403);
         assertThat(status(HttpMethod.DELETE, "/api/v1/access/roles/r1", accessManager)).isEqualTo(403);
+        // inviting is access:manage only: role:manage alone and access:read do not open it, anonymous is 401
+        assertThat(status(HttpMethod.POST, "/api/v1/access/users/invite", accessManager)).isEqualTo(200);
+        assertThat(status(HttpMethod.POST, "/api/v1/access/users/invite", roleManager)).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/access/users/invite", permissionsOnly(Set.of("access:read")))).isEqualTo(403);
+        assertThat(status(HttpMethod.POST, "/api/v1/access/users/invite", null)).isEqualTo(401);
         // other non-GET calls under /access stay access:manage
         assertThat(status(HttpMethod.POST, "/api/v1/access/other", accessManager)).isEqualTo(200);
         assertThat(status(HttpMethod.POST, "/api/v1/access/other", roleManager)).isEqualTo(403);
