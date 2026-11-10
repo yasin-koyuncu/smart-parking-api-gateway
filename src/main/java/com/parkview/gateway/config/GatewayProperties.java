@@ -24,6 +24,11 @@ import java.util.Map;
  *                       bearer token (EventSource cannot set headers)
  * @param docsEnabled    expose the aggregated Swagger UI ({@code /swagger-ui.html}) - never in production
  * @param services       base URLs of the downstream services, used for the aggregated API docs routes
+ * @param trustedProxies required, no default (the infrastructure decides): the number of reverse proxies / load
+ *                       balancers between the internet and this gateway. {@code 0} = nobody: {@code X-Forwarded-For}
+ *                       is ignored and the rate-limit key is the socket address; {@code n >= 1} = the address
+ *                       {@code n} hops from the right of {@code X-Forwarded-For} is the client. Too low and every
+ *                       client shares the proxy's bucket; too high and a client can pick its own bucket.
  */
 @Validated
 @ConfigurationProperties("parkview.gateway")
@@ -32,7 +37,15 @@ public record GatewayProperties(
         @DefaultValue List<String> allowedOrigins,
         @DefaultValue List<String> sseTokenPaths,
         @DefaultValue("false") boolean docsEnabled,
-        @DefaultValue Map<String, String> services) {
+        @DefaultValue Map<String, String> services,
+        Integer trustedProxies) {
+
+    public GatewayProperties {
+        if (trustedProxies == null || trustedProxies < 0) {
+            throw new IllegalArgumentException("parkview.gateway.trusted-proxies (GATEWAY_TRUSTED_PROXIES) must be set to an integer >= 0: "
+                    + "the number of reverse proxies in front of the gateway (0 = none, X-Forwarded-For is ignored); got " + trustedProxies);
+        }
+    }
 
     public enum Access {
         PUBLIC,

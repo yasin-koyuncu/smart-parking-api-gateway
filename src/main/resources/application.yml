@@ -254,7 +254,8 @@ spring:
 server:
   port: ${PORT:8080}
   shutdown: graceful
-  forward-headers-strategy: framework
+  # No forward-headers-strategy on purpose: it would rewrite the request's remote address from the first (client-chosen)
+  # X-Forwarded-For entry. The client address is resolved in RedisConfig from parkview.gateway.trusted-proxies instead.
 
 management:
   endpoints:
@@ -315,6 +316,10 @@ parkview:
     legacy-role-fallback: ${LEGACY_ROLE_FALLBACK:false}
 
   gateway:
+    # REQUIRED, no default: the number of reverse proxies / load balancers in front of the gateway (0 = none: X-Forwarded-For is
+    # ignored and the rate-limit key is the socket address; n >= 1: the address n hops from the right of X-Forwarded-For is the client).
+    # Behind a load balancer 0 puts every client in the balancer's bucket; more than there are proxies lets a client pick its own bucket.
+    trusted-proxies: ${GATEWAY_TRUSTED_PROXIES}
     docs-enabled: ${DOCS_ENABLED:false}
     # Browser origins (the frontend). Comma separated in the environment.
     allowed-origins: ${FRONTEND_URL:http://localhost:5173}
