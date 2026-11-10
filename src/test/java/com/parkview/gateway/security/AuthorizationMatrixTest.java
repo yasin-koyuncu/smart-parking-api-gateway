@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Authorisation matrix of the shipped rules ({@code application.yml}) against permission-only tokens, the role
- * fallback being off by default, the explicit "any valid token" rules and the deny-by-default cases. Runs on a mock server (no sockets), so it also works where Netty
+ * claim being the only source of permissions, the explicit "any valid token" rules and the deny-by-default cases. Runs on a mock server (no sockets), so it also works where Netty
  * cannot open a loopback connection.
  */
 @SpringBootTest(classes = AuthorizationTestApp.class, properties = {"SUPABASE_URL=http://issuer.test", "parkview.gateway.trusted-proxies=0"})
@@ -178,9 +178,9 @@ class AuthorizationMatrixTest {
         return request.exchange().returnResult(String.class).getStatus().value();
     }
 
-    /** A token as the token hook writes it: the role and the default permissions of that role in the {@code permissions} claim. */
+    /** A token as the token hook writes it: the role and the permissions of a generic staff bundle ({@link RoleBundles}) in the {@code permissions} claim. */
     private static Map<String, Object> defaults(String role) {
-        return Map.of("role", role, "permissions", Permissions.defaultsFor(role).stream().sorted().toList());
+        return Map.of("role", role, "permissions", RoleBundles.of(role).stream().sorted().toList());
     }
 
     /** A token that carries permissions only: no role at all. */
@@ -307,7 +307,7 @@ class AuthorizationMatrixTest {
         assertThat(status(HttpMethod.POST, "/api/v1/access/other", roleManager)).isEqualTo(403);
     }
 
-    // ── role defaults (the permissions claim a token carries) and the legacy role fallback (off by default) ──
+    // ── role bundles (the permissions claim a token carries) and tokens without the claim ──
 
     @Test
     void tokensCarryingTheRoleDefaultsGetExactlyThose() {
@@ -354,7 +354,7 @@ class AuthorizationMatrixTest {
     }
 
     @Test
-    void theRoleFallbackIsOffByDefaultSoATokenWithoutPermissionsHoldsNothingWhateverItsRole() {
+    void aTokenWithoutPermissionsHoldsNothingWhateverItsRole() {
         for (String role : List.of("admin", "operator")) {
             Map<String, Object> noClaim = Map.of("role", role);
             assertThat(status(HttpMethod.GET, "/api/v1/sessions/zone/z1", noClaim)).as(role + " without the claim").isEqualTo(403);

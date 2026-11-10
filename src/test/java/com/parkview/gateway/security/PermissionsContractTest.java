@@ -22,7 +22,7 @@ class PermissionsContractTest {
     private static final Path CONTRACT = Path.of("..", "smart-parking-e2e", "contracts", "permissions.json");
 
     @Test
-    void catalogueAndRoleDefaultsMatchTheContract() throws IOException {
+    void catalogueAndTestRoleBundlesMatchTheContract() throws IOException {
         assumeTrue(Files.exists(CONTRACT), "e2e contract not checked out next to this repository");
         JsonNode contract = new ObjectMapper().readTree(Files.readString(CONTRACT));
 
@@ -33,7 +33,7 @@ class PermissionsContractTest {
         for (String role : new String[]{"admin", "operator", "driver"}) {
             Set<String> defaults = new HashSet<>();
             contract.get("defaultsByRole").get(role).forEach(n -> defaults.add(n.asText()));
-            assertThat(Permissions.DEFAULTS_BY_ROLE.get(role)).as("defaults of " + role).isEqualTo(defaults);
+            assertThat(RoleBundles.of(role)).as("test bundle of " + role).isEqualTo(defaults);
         }
     }
 }

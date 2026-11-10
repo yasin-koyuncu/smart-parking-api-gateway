@@ -11,7 +11,7 @@ import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
-import com.parkview.gateway.security.Permissions;
+import com.parkview.gateway.security.RoleBundles;
 import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -103,9 +103,9 @@ class GatewayRoutingTest {
         }
     }
 
-    /** A token as the token hook writes it: the role and, in {@code permissions}, the default permissions of that role. */
+    /** A token as the token hook writes it: the role and, in {@code permissions}, the permissions of that role's bundle. */
     private static String validToken(String role, String subject) {
-        return token(Map.of("role", role, "permissions", Permissions.defaultsFor(role).stream().sorted().toList()), subject,
+        return token(Map.of("role", role, "permissions", RoleBundles.of(role).stream().sorted().toList()), subject,
                 "http://issuer.test/auth/v1", "authenticated", Instant.now().plusSeconds(300), SIGNING_KEY);
     }
 
@@ -161,7 +161,7 @@ class GatewayRoutingTest {
     /** A signed-in user with the roles and the default permissions of {@code role}. */
     private WebTestClient as(String role, String subject) {
         List<String> authorities = new ArrayList<>(List.of("admin".equals(role) ? new String[]{"ROLE_ADMIN", "ROLE_OPERATOR"} : new String[]{"ROLE_" + role.toUpperCase()}));
-        authorities.addAll(Permissions.defaultsFor(role));
+        authorities.addAll(RoleBundles.of(role));
         return client.mutateWith(SecurityMockServerConfigurers.mockJwt()
                 .jwt(j -> j.subject(subject).claim("app_metadata", Map.of("role", role)))
                 .authorities(AuthorityUtils.createAuthorityList(authorities.toArray(String[]::new))));
@@ -404,7 +404,7 @@ class GatewayRoutingTest {
     void aRoleWithoutAPermissionsClaimIsNotAdminAndAnEmptyPermissionsClaimHoldsNothing() {
         client.post().uri("/api/v1/zones").header("Authorization", "Bearer " + validToken("admin", "ad-9"))
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isOk();
-        // the role fallback is off by default: role=admin without the claim holds nothing
+        // role=admin without the claim holds nothing
         String noClaim = token("admin", "ad-7", "http://issuer.test/auth/v1", "authenticated", Instant.now().plusSeconds(300), SIGNING_KEY);
         client.post().uri("/api/v1/zones").header("Authorization", "Bearer " + noClaim)
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{}").exchange().expectStatus().isForbidden();
