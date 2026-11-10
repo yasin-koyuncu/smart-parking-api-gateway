@@ -84,9 +84,7 @@ Claims (written by the Supabase access-token hook, ADR 0002):
 * `app_metadata.role` (`admin` \| `operator` \| `driver`) becomes `ROLE_*`; ADMIN implies OPERATOR.
 * `app_metadata.permissions` (string[]) becomes one authority per entry, named exactly like the permission. Names are matched exactly (no prefix, case folding or wildcards).
 * Nothing else is read: the token carries no `sites` and no `plates` claim (ADR 0011), so the gateway has no site or plate scope and makes no site or plate lookup of its own.
-* `parkview.security.legacy-role-fallback` (`LEGACY_ROLE_FALLBACK`, default `false`): the token hook always writes the `permissions` claim, so a token **without** it is authorised for nothing that needs a
-  permission, whatever its role (a `role=admin` token without the claim must not hold everything). Set it to `true` and such a token gets the default permissions of its role (`defaultsByRole` in the contract), a
-  rollout aid for tokens minted before permissions existed. A token that has the claim, even `[]`, is never supplemented: an admin whose permissions were all revoked has none.
+* A token **without** the `permissions` claim has no permissions, whatever its `role` (a `role=admin` token without the claim must not hold everything); there is no fallback or switch. The role authority still comes from `role`. A token whose claim is `[]` has none either: an admin whose permissions were all revoked holds nothing.
 
 ## Security behaviour worth knowing
 
@@ -129,7 +127,6 @@ header). Logs stay English. The reactive chain has no MVC locale resolver: `Requ
 | `FRONTEND_URL` | `http://localhost:5173` | CORS origin(s) |
 | `REDIS_HOST` / `REDIS_PORT` | `localhost` / `6379` | rate limiter (fails open when Redis is down) |
 | `*_SERVICE_URL` etc. | `http://localhost:<port>` | downstream base URLs: `AUTH_SERVICE_URL`, `RULE_ENGINE_URL`, `SESSION_SERVICE_URL`, `PARKING_MAPPING_URL`, `EVENT_STREAMING_URL`, `INGESTION_SERVICE_URL`, `FILE_SERVICE_URL`, `NOTIFICATION_SERVICE_URL`, `LOOKUP_SERVICE_URL`, `PAYMENT_SERVICE_URL`, `AI_SERVICE_URL` |
-| `LEGACY_ROLE_FALLBACK` | `false` | `true` derives permissions from the role for tokens without `app_metadata.permissions` (`parkview.security.legacy-role-fallback`) |
 | `DOCS_ENABLED` | `false` | aggregated Swagger UI at `/swagger-ui.html` (each service must have `DOCS_ENABLED=true` too). Never in production |
 
 ## Tracing
@@ -164,7 +161,7 @@ mvn -B -ntp verify            # needs JDK 24 and Docker (Testcontainers starts R
 docker build -t api-gateway .
 ```
 
-`AuthorizationMatrixTest` runs the real rules and converter on a mock server (no sockets, no Docker) and covers permission-only tokens, the role fallback being off by default, the explicit `AUTHENTICATED` rules and the deny-by-default cases (unlisted paths, unrouted paths, `/internal/**`).
+`AuthorizationMatrixTest` runs the real rules and converter on a mock server (no sockets, no Docker) and covers permission-only tokens, tokens without a `permissions` claim holding nothing, the explicit `AUTHENTICATED` rules and the deny-by-default cases (unlisted paths, unrouted paths, `/internal/**`).
 Integration tests start the real gateway, use a MockWebServer as every downstream service and serve a JWKS
 for genuine ES256 token validation. On a machine where Netty cannot open selectors (some Windows setups report
 "Unable to establish loopback connection") run them in a container next to a Redis container:
