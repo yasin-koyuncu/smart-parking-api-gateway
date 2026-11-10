@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** With {@code parkview.security.legacy-role-fallback=false} only the permissions claim counts. */
 @SpringBootTest(classes = AuthorizationTestApp.class,
-        properties = {"SUPABASE_URL=http://issuer.test", "parkview.security.legacy-role-fallback=false"})
+        properties = {"SUPABASE_URL=http://issuer.test", "parkview.gateway.trusted-proxies=0", "parkview.security.legacy-role-fallback=false"})
 class LegacyFallbackDisabledTest {
 
     @Autowired

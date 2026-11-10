@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SseTokenBearerConverterTest {
 
     private final SseTokenBearerConverter converter = new SseTokenBearerConverter(
-            new GatewayProperties(List.of(), List.of(), List.of("/api/v1/events/stream/**"), false, Map.of()));
+            new GatewayProperties(List.of(), List.of(), List.of("/api/v1/events/stream/**"), false, Map.of(), 0));
 
     private static MockServerWebExchange exchange(MockServerHttpRequest.BaseBuilder<?> request) {
         return MockServerWebExchange.from(request.build());

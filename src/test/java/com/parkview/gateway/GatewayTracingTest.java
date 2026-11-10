@@ -131,6 +131,7 @@ class GatewayTracingTest {
         registry.add("management.tracing.enabled", () -> "true");
         registry.add("management.tracing.sampling.probability", () -> "1.0");
         registry.add("management.otlp.tracing.export.enabled", () -> "false");
+        registry.add("parkview.gateway.trusted-proxies", () -> "0");
         registry.add("parkview.security.issuer", () -> "http://issuer.test/auth/v1");
         registry.add("parkview.security.jwks-uri", () -> upstream + "/jwks");
         registry.add("parkview.security.internal-api-key", () -> "test-internal-key");

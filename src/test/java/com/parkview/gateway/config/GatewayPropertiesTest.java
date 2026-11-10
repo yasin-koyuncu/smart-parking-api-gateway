@@ -25,7 +25,9 @@ class GatewayPropertiesTest {
 
     private static GatewayProperties bind(Map<String, Object> properties) {
         MutablePropertySources sources = new MutablePropertySources();
-        sources.addFirst(new MapPropertySource("test", properties));
+        Map<String, Object> all = new HashMap<>(Map.of("parkview.gateway.trusted-proxies", "0"));
+        all.putAll(properties);
+        sources.addFirst(new MapPropertySource("test", all));
         return new Binder(ConfigurationPropertySources.from(sources)).bind("parkview.gateway", GatewayProperties.class).get();
     }
 
@@ -66,11 +68,27 @@ class GatewayPropertiesTest {
     }
 
     @Test
+    void trustedProxiesIsRequiredAndNotNegative() {
+        MutablePropertySources sources = new MutablePropertySources();
+        sources.addFirst(new MapPropertySource("test", Map.of("parkview.gateway.rules[0].paths[0]", "/x/**", "parkview.gateway.rules[0].access", "PUBLIC")));
+        assertThatThrownBy(() -> new Binder(ConfigurationPropertySources.from(sources)).bind("parkview.gateway", GatewayProperties.class).get())
+                .isInstanceOf(BindException.class)
+                .hasStackTraceContaining("GATEWAY_TRUSTED_PROXIES");
+        assertThatThrownBy(() -> bind(Map.of("parkview.gateway.trusted-proxies", "-1")))
+                .isInstanceOf(BindException.class)
+                .hasStackTraceContaining("GATEWAY_TRUSTED_PROXIES");
+        assertThat(bind(Map.of("parkview.gateway.trusted-proxies", "2")).trustedProxies()).isEqualTo(2);
+    }
+
+    @Test
     void theShippedApplicationYmlBindsAndEveryRuleNamesAKnownPermission() throws IOException {
         MutablePropertySources sources = new MutablePropertySources();
+        sources.addFirst(new MapPropertySource("env", Map.of("GATEWAY_TRUSTED_PROXIES", "1")));
         new YamlPropertySourceLoader().load("application", new ClassPathResource("application.yml")).forEach(sources::addLast);
         GatewayProperties props = new Binder(ConfigurationPropertySources.from(sources), new PropertySourcesPlaceholdersResolver(sources))
                 .bind("parkview.gateway", GatewayProperties.class).get();
+
+        assertThat(props.trustedProxies()).as("comes from GATEWAY_TRUSTED_PROXIES, no default in the yml").isEqualTo(1);
 
         List<GatewayProperties.Rule> permissionRules = props.rules().stream().filter(r -> r.access() == Access.PERMISSION).toList();
         assertThat(permissionRules).isNotEmpty().allSatisfy(r -> assertThat(Permissions.isKnown(r.permission())).isTrue());

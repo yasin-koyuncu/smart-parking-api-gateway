@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class CorsConfigTest {
 
-    private final GatewayProperties props = new GatewayProperties(List.of(), List.of("http://localhost:5173"), List.of(), false, Map.of());
+    private final GatewayProperties props = new GatewayProperties(List.of(), List.of("http://localhost:5173"), List.of(), false, Map.of(), 0);
     private final CorsConfigurationSource source = new CorsConfig().corsConfigurationSource(props);
 
     private MockServerWebExchange preflight(String origin) {

@@ -137,6 +137,7 @@ class GatewayRoutingTest {
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
         String upstream = "http://localhost:" + UPSTREAM.getPort();
+        registry.add("parkview.gateway.trusted-proxies", () -> "0");
         registry.add("parkview.security.issuer", () -> "http://issuer.test/auth/v1");
         registry.add("parkview.security.jwks-uri", () -> upstream + "/jwks");
         registry.add("parkview.security.internal-api-key", () -> "test-internal-key");
@@ -619,6 +620,21 @@ class GatewayRoutingTest {
             }
         }
         assertThat(tooMany).as("requests beyond the burst of 5 are throttled").isGreaterThan(0);
+    }
+
+    @Test
+    void aSpoofedXForwardedForDoesNotGiveTheCallerABucketOfItsOwn() {
+        // trusted-proxies=0: X-Forwarded-For is ignored, so a new "client address" per request does not escape the login limit
+        int tooMany = 0;
+        for (int i = 0; i < 12; i++) {
+            var result = client.post().uri("/api/v1/auth/login").header("X-Forwarded-For", "198.51.100." + (i + 1))
+                    .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"email\":\"a@b.se\",\"password\":\"x\"}")
+                    .exchange().returnResult(String.class);
+            if (result.getStatus().value() == 429) {
+                tooMany++;
+            }
+        }
+        assertThat(tooMany).as("a different spoofed address per request still shares the socket's bucket").isGreaterThan(0);
     }
 
     // ── operability ─────────────────────────────────────────────────────────────

@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** The switch still works: with {@code parkview.security.legacy-role-fallback=true} a token without a permissions claim gets its role's defaults. */
 @SpringBootTest(classes = AuthorizationTestApp.class,
-        properties = {"SUPABASE_URL=http://issuer.test", "parkview.security.legacy-role-fallback=true"})
+        properties = {"SUPABASE_URL=http://issuer.test", "parkview.gateway.trusted-proxies=0", "parkview.security.legacy-role-fallback=true"})
 class LegacyFallbackEnabledTest {
 
     @Autowired

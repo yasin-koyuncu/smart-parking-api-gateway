@@ -14,7 +14,7 @@ import java.util.Map;
  * The 401 and 403 that the gateway's security chain writes follow the {@code Accept-Language} header (Swedish, English; any other
  * language and no header get English) and carry the stable {@code code}. Runs on a mock server like the authorisation matrix.
  */
-@SpringBootTest(classes = AuthorizationTestApp.class, properties = "SUPABASE_URL=http://issuer.test")
+@SpringBootTest(classes = AuthorizationTestApp.class, properties = {"SUPABASE_URL=http://issuer.test", "parkview.gateway.trusted-proxies=0"})
 class ErrorTextsSecurityTest {
 
     private static final String GUARDED = "/api/v1/zones";
