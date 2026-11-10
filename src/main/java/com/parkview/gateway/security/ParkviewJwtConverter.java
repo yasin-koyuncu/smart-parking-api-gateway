@@ -20,24 +20,23 @@ import java.util.Map;
  *   <li>{@code app_metadata.permissions} (string[]) to one authority per permission, named exactly like the
  *       permission ({@code zone:write})</li>
  * </ul>
- * Tokens minted before permissions existed have no {@code permissions} claim: while the legacy fallback is on
- * the defaults of the role are granted instead. A claim that is present, even empty, is never supplemented.
+ * A token without the {@code permissions} claim has no permissions (its role authority still comes from {@code role}).
  */
 public final class ParkviewJwtConverter {
 
     private ParkviewJwtConverter() {
     }
 
-    public static ReactiveJwtAuthenticationConverter create(boolean legacyRoleFallback) {
+    public static ReactiveJwtAuthenticationConverter create() {
         ReactiveJwtAuthenticationConverter converter = new ReactiveJwtAuthenticationConverter();
-        converter.setJwtGrantedAuthoritiesConverter(authorities(legacyRoleFallback));
+        converter.setJwtGrantedAuthoritiesConverter(authorities());
         return converter;
     }
 
-    static Converter<Jwt, Flux<GrantedAuthority>> authorities(boolean legacyRoleFallback) {
+    static Converter<Jwt, Flux<GrantedAuthority>> authorities() {
         return jwt -> {
             List<GrantedAuthority> result = new ArrayList<>(roles(jwt));
-            result.addAll(permissions(jwt, legacyRoleFallback));
+            result.addAll(permissions(jwt));
             return Flux.fromIterable(result);
         };
     }
@@ -62,21 +61,15 @@ public final class ParkviewJwtConverter {
         return result;
     }
 
-    static List<GrantedAuthority> permissions(Jwt jwt, boolean legacyRoleFallback) {
-        Map<String, Object> appMetadata = appMetadata(jwt);
+    static List<GrantedAuthority> permissions(Jwt jwt) {
         List<GrantedAuthority> result = new ArrayList<>();
-        if (appMetadata.containsKey("permissions")) {
-            // present (even empty or malformed) means the token is authoritative: no fallback
-            if (appMetadata.get("permissions") instanceof List<?> granted) {
-                granted.stream()
-                        .filter(String.class::isInstance)
-                        .map(String.class::cast)
-                        .filter(p -> !p.isBlank())
-                        .distinct()   // exact names, no trimming or case folding
-                        .forEach(p -> result.add(new SimpleGrantedAuthority(p)));
-            }
-        } else if (legacyRoleFallback && appMetadata.get("role") != null) {
-            Permissions.defaultsFor(appMetadata.get("role").toString()).stream().sorted()
+        // absent or malformed claim: no permissions
+        if (appMetadata(jwt).get("permissions") instanceof List<?> granted) {
+            granted.stream()
+                    .filter(String.class::isInstance)
+                    .map(String.class::cast)
+                    .filter(p -> !p.isBlank())
+                    .distinct()   // exact names, no trimming or case folding
                     .forEach(p -> result.add(new SimpleGrantedAuthority(p)));
         }
         return result;

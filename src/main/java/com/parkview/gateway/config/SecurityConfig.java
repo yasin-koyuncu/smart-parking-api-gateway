@@ -59,7 +59,7 @@ public class SecurityConfig {
         writeProblemErrors(http, objectMapper, errorMessages);
         http.oauth2ResourceServer(o -> o
                 .bearerTokenConverter(new SseTokenBearerConverter(gateway))
-                .jwt(j -> j.jwtDecoder(jwtDecoder).jwtAuthenticationConverter(ParkviewJwtConverter.create(security.legacyRoleFallback()))));
+                .jwt(j -> j.jwtDecoder(jwtDecoder).jwtAuthenticationConverter(ParkviewJwtConverter.create())));
 
         http.authorizeExchange(ex -> {
             ex.pathMatchers(HttpMethod.OPTIONS, "/**").permitAll();

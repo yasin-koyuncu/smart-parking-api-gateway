@@ -311,9 +311,6 @@ parkview:
     audience: ${SUPABASE_AUDIENCE:authenticated}
     # Protects the gateway's own /actuator/prometheus: an operations path, so it takes the ops key like every other service.
     internal-api-key: ${OPS_API_KEY:}
-    # Off: a token without app_metadata.permissions is authorised for nothing that needs a permission (the token hook always writes the claim).
-    # On: such a token gets the default permissions of its role (ADR 0002 rollout), so role=admin without the claim would hold everything.
-    legacy-role-fallback: ${LEGACY_ROLE_FALLBACK:false}
 
   gateway:
     # REQUIRED, no default: the number of reverse proxies / load balancers in front of the gateway (0 = none: X-Forwarded-For is
@@ -380,8 +377,7 @@ parkview:
       - { paths: ["/api/v1/payments/history", "/api/v1/payments/review"], methods: [GET], access: AUTHENTICATED }
       # notifications of the signed-in user (list, read, read-all, push-subscription, test-push): the service scopes everything to the token subject
       - { paths: ["/api/v1/notifications/**"], access: AUTHENTICATED }
-      # operator functions: one permission each (ADR 0002). A token without a permissions claim holds none of them
-      # (parkview.security.legacy-role-fallback is off by default).
+      # operator functions: one permission each (ADR 0002). A token without a permissions claim holds none of them.
       - { paths: ["/api/v1/ai/**"], access: PERMISSION, permission: "ai:use" }
       # the signed URL of a stored detection or fine image is a read (camera:read); everything else under cameras/admin (rotate-key, ...) is camera:admin
       - { paths: ["/api/v1/cameras/admin/**"], methods: [GET, HEAD], access: PERMISSION, permission: "camera:read" }
