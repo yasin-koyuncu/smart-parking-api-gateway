@@ -86,4 +86,11 @@ class ParkviewJwtConverterTest {
         // the role authority still comes from the role claim
         assertThat(all(jwt(Map.of("role", "admin")))).containsExactlyInAnyOrder("ROLE_ADMIN", "ROLE_OPERATOR");
     }
+
+    @Test
+    void entriesThatAreNotResourceActionNamesAreDroppedNeverGranted() {
+        // PermissionClaims (parkview-security-core): a role name or a free-form entry in the claim is no permission
+        assertThat(permissions(jwt(Map.of("role", "operator", "permissions", List.of("ROLE_ADMIN", "admin", "zone:write")))))
+                .containsExactly("zone:write");
+    }
 }

@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+  packages: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,7 +18,20 @@ jobs:
           distribution: temurin
           java-version: "24"
           cache: maven
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
       - name: Build and test (Testcontainers starts Redis)
         run: mvn -B -ntp verify
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build image
-        run: docker build -t api-gateway:ci .
+        run: |
+          printf '<settings><servers><server><id>github</id><username>%s</username><password>%s</password></server></servers></settings>' \
+            "$GITHUB_ACTOR" "$GITHUB_TOKEN" > "$RUNNER_TEMP/maven-settings.xml"
+          docker build --secret id=maven_settings,src="$RUNNER_TEMP/maven-settings.xml" -t api-gateway:ci .
+          rm -f "$RUNNER_TEMP/maven-settings.xml"
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

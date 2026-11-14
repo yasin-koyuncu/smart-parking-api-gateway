@@ -25,8 +25,4 @@ public record SecurityProperties(
     public String resolvedJwksUri() {
         return jwksUri == null || jwksUri.isBlank() ? issuer + "/.well-known/jwks.json" : jwksUri;
     }
-
-    public boolean internalApiEnabled() {
-        return internalApiKey != null && !internalApiKey.isBlank();
-    }
 }

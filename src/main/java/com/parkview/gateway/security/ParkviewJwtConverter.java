@@ -1,5 +1,7 @@
 package com.parkview.gateway.security;
 
+import com.parkview.platform.security.PermissionClaims;
+import com.parkview.platform.security.Role;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -9,16 +11,16 @@ import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 /**
- * Maps the Supabase claims to authorities:
+ * Maps the Supabase claims to authorities (the claim parsing is {@code Role} and {@code PermissionClaims} of
+ * parkview-security-core):
  * <ul>
  *   <li>{@code app_metadata.role} (admin | operator | driver) to {@code ROLE_*}; ADMIN implies OPERATOR
  *       (same hierarchy as in the services)</li>
  *   <li>{@code app_metadata.permissions} (string[]) to one authority per permission, named exactly like the
- *       permission ({@code zone:write})</li>
+ *       permission ({@code zone:write}); entries that are not of the form {@code resource:action} are dropped</li>
  * </ul>
  * A token without the {@code permissions} claim has no permissions (its role authority still comes from {@code role}).
  */
@@ -43,36 +45,21 @@ public final class ParkviewJwtConverter {
 
     static List<GrantedAuthority> roles(Jwt jwt) {
         List<GrantedAuthority> result = new ArrayList<>();
-        Object role = appMetadata(jwt).get("role");
-        if (role == null) {
-            return result;
-        }
-        switch (role.toString().trim().toUpperCase(Locale.ROOT)) {
-            case "ADMIN" -> {
-                result.add(new SimpleGrantedAuthority("ROLE_ADMIN"));
-                result.add(new SimpleGrantedAuthority("ROLE_OPERATOR"));
+        // an unknown or missing role gives no authority: the request is authenticated but not authorised for role rules
+        Role.parse(appMetadata(jwt).get("role")).ifPresent(role -> {
+            result.add(new SimpleGrantedAuthority(role.authority()));
+            if (role == Role.ADMIN) {
+                result.add(new SimpleGrantedAuthority(Role.OPERATOR.authority()));
             }
-            case "OPERATOR" -> result.add(new SimpleGrantedAuthority("ROLE_OPERATOR"));
-            case "DRIVER" -> result.add(new SimpleGrantedAuthority("ROLE_DRIVER"));
-            default -> {
-                // unknown role: no authority, the request is authenticated but not authorised for role rules
-            }
-        }
+        });
         return result;
     }
 
     static List<GrantedAuthority> permissions(Jwt jwt) {
-        List<GrantedAuthority> result = new ArrayList<>();
-        // absent or malformed claim: no permissions
-        if (appMetadata(jwt).get("permissions") instanceof List<?> granted) {
-            granted.stream()
-                    .filter(String.class::isInstance)
-                    .map(String.class::cast)
-                    .filter(p -> !p.isBlank())
-                    .distinct()   // exact names, no trimming or case folding
-                    .forEach(p -> result.add(new SimpleGrantedAuthority(p)));
-        }
-        return result;
+        // absent or malformed claim: no permissions (parsing and name rules are the library's)
+        return PermissionClaims.parse(appMetadata(jwt).get(PermissionClaims.CLAIM)).stream()
+                .<GrantedAuthority>map(SimpleGrantedAuthority::new)
+                .toList();
     }
 
     private static Map<String, Object> appMetadata(Jwt jwt) {

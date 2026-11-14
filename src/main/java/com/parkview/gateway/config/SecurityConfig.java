@@ -5,6 +5,7 @@ import com.parkview.gateway.security.ParkviewJwtConverter;
 import com.parkview.gateway.security.RuleAuthorizer;
 import com.parkview.gateway.security.SseTokenBearerConverter;
 import com.parkview.gateway.web.ProblemResponses;
+import com.parkview.platform.security.InternalApiKeys;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.MessageSource;
@@ -23,9 +24,6 @@ import org.springframework.security.web.server.authorization.AuthorizationContex
 import org.springframework.security.web.server.header.ReferrerPolicyServerHttpHeadersWriter.ReferrerPolicy;
 import org.springframework.web.cors.reactive.CorsConfigurationSource;
 import reactor.core.publisher.Mono;
-
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 
 /**
  * Edge security: answer CORS before authorisation, write the security headers and error bodies, validate the JWT
@@ -100,13 +98,12 @@ public class SecurityConfig {
                         "title.forbidden", "Forbidden", "error.forbidden", "You are not allowed to perform this action")));
     }
 
-    /** Metrics are for the platform only: callers must present the internal API key. */
+    /** Metrics are for the platform only: callers must present the internal API key (compared in constant time, an unset key never matches). */
     private static ReactiveAuthorizationManager<AuthorizationContext> internalKey(SecurityProperties security) {
+        InternalApiKeys keys = new InternalApiKeys(security.internalApiKey(), null, null);
         return (Mono<Authentication> authentication, AuthorizationContext context) -> {
-            String presented = context.getExchange().getRequest().getHeaders().getFirst("X-Internal-Api-Key");
-            boolean ok = security.internalApiEnabled() && presented != null && MessageDigest.isEqual(
-                    security.internalApiKey().getBytes(StandardCharsets.UTF_8), presented.getBytes(StandardCharsets.UTF_8));
-            return Mono.just(new AuthorizationDecision(ok));
+            String presented = context.getExchange().getRequest().getHeaders().getFirst(InternalApiKeys.HEADER);
+            return Mono.just(new AuthorizationDecision(keys.check(presented) != InternalApiKeys.Result.NONE));
         };
     }
 }

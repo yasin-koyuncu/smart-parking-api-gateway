@@ -19,7 +19,7 @@ unauthorised traffic away from them and gives every error the same shape.
 Code layout (`com.parkview.gateway`):
 
 * `config`: `SecurityConfig` (chain: CORS, headers, problem+json errors, actuator rules), `JwtDecoderConfig` (ES256/JWKS decoder with issuer and audience), `CorsConfig`, `RedisConfig`, `DocsRoutesConfig` and the `@ConfigurationProperties` records.
-* `security`: `RuleAuthorizer` (applies `parkview.gateway.rules`), `AudienceValidator`, `ParkviewJwtConverter` (claims to authorities), `Permissions` (catalogue), `SseTokenPaths` + `SseTokenBearerConverter` (`?token=` on SSE paths), `RoleHeader` (value of `X-User-Role`).
+* `security`: `RuleAuthorizer` (applies `parkview.gateway.rules`), `AudienceValidator`, `ParkviewJwtConverter` (claims to authorities, parsed with `Role` and `PermissionClaims` of parkview-security-core), `Permissions` (catalogue), `SseTokenPaths` + `SseTokenBearerConverter` (`?token=` on SSE paths), `RoleHeader` (value of `X-User-Role`).
 * `filter`: global route filters (`SseTokenForwardFilter` -2, `AuthForwardFilter` -1, `AccessLogFilter`).
 * `web`: edge headers, error handler, problem+json writer.
 
@@ -82,7 +82,7 @@ except health, info and the key-protected `prometheus`.
 Claims (written by the Supabase access-token hook, ADR 0002):
 
 * `app_metadata.role` (`admin` \| `operator` \| `driver`) becomes `ROLE_*`; ADMIN implies OPERATOR.
-* `app_metadata.permissions` (string[]) becomes one authority per entry, named exactly like the permission. Names are matched exactly (no prefix, case folding or wildcards).
+* `app_metadata.permissions` (string[]) becomes one authority per entry, named exactly like the permission. Names are matched exactly (no prefix, case folding or wildcards); an entry that is not of the form `resource:action` (e.g. `ROLE_ADMIN`) is dropped, never granted.
 * Nothing else is read: the token carries no `sites` and no `plates` claim (ADR 0011), so the gateway has no site or plate scope and makes no site or plate lookup of its own.
 * A token **without** the `permissions` claim has no permissions, whatever its `role` (a `role=admin` token without the claim must not hold everything); there is no fallback or switch. The role authority still comes from `role`. A token whose claim is `[]` has none either: an admin whose permissions were all revoked holds nothing.
 
@@ -156,9 +156,11 @@ tracing on Boot adds `[traceId-spanId]` to every log line.
 
 ## Run, test, build
 
+The POM uses `parkview-parent` and `parkview-security-core` of [parkview-platform](https://github.com/yasin-koyuncu/parkview-platform) (the servlet starter and parkview-web are not used: the gateway is WebFlux). The artifacts come from GitHub Packages, so Maven needs a `settings.xml` with a server `github` (token with `read:packages`, see `docs/consuming.md` of parkview-platform); the Docker build takes it as a BuildKit secret.
+
 ```bash
 mvn -B -ntp verify            # needs JDK 24 and Docker (Testcontainers starts Redis)
-docker build -t api-gateway .
+docker build --secret id=maven_settings,src=$HOME/.m2/settings.xml -t api-gateway .
 ```
 
 `AuthorizationMatrixTest` runs the real rules and converter on a mock server (no sockets, no Docker) and covers permission-only tokens, tokens without a `permissions` claim holding nothing, the explicit `AUTHENTICATED` rules and the deny-by-default cases (unlisted paths, unrouted paths, `/internal/**`).
